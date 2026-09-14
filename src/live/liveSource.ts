@@ -25,6 +25,7 @@ export function createLiveSource(sink: EventSink): Source {
   let lastFrameAt = 0;
   let pollTimer: number | null = null;
   let polling = false;
+  let omitted = { departed: 0, stale: 0 };
 
   const absorb = (payload: unknown): void => {
     if (typeof payload !== 'object' || payload === null) return;
@@ -57,6 +58,11 @@ export function createLiveSource(sink: EventSink): Source {
       const events = Array.isArray(body.events) ? body.events : [];
       for (const e of events) absorb(e);
       if (typeof body.cursor === 'number' && body.cursor > cursor) cursor = body.cursor;
+      if (!incremental) {
+        const o = body.omitted as Record<string, unknown> | undefined;
+        omitted = { departed: typeof o?.departed === 'number' ? o.departed : 0, stale: typeof o?.stale === 'number' ? o.stale : 0 };
+        sink.settle?.();
+      }
       return true;
     } catch {
       return false;
@@ -130,5 +136,6 @@ export function createLiveSource(sink: EventSink): Source {
     stop() { stopped = true; clearTimers(); stream?.close(); stream = null; status = 'idle'; },
     status: () => status,
     now: () => Date.now() / 1000 + offset,
+    omitted: () => omitted,
   };
 }

@@ -117,7 +117,11 @@ function renderStatus(): void {
     text = `scripted demo · ${mains} simulated sessions · ${active.length - mains} simulated helpers · ${working} working` + (resting ? ` · ${resting} resting` : '');
   } else {
     text = `live Hermes events · ${st}`;
-    if (st === 'connected') text += ` · ${mains} sessions · ${active.length - mains} helpers · ${working} working` + (resting ? ` · ${resting} resting` : '');
+    if (st === 'connected') {
+      text += ` · ${mains} sessions · ${active.length - mains} helpers · ${working} working` + (resting ? ` · ${resting} resting` : '');
+      const o = source.omitted?.();
+      if (o && o.stale + o.departed > 0) text += ` · ${o.stale + o.departed} past sessions not shown`;
+    }
     if (st === 'disconnected') text += ' · start the live server or open ?agents=demo';
   }
   statusEl.textContent = text;

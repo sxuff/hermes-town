@@ -119,6 +119,22 @@ The public v1 contract retains a role-derived `district` field for compatibility
 
 A disconnected live page stays empty and says `disconnected`. It never substitutes demo residents.
 
+## What a fresh client sees
+
+A full snapshot describes the town as it is now, not the journal's history.
+The server leaves out residents that have departed and residents nothing has
+been heard from for fifteen minutes (`LIMITS.staleSeconds`); their journal
+entries stay retained for the stream and for incremental catch-up. The
+snapshot reports how many it left out as `omitted: { departed, stale }`, and
+the town's status line shows that count as past sessions not shown. Residents
+that are in the snapshot appear where they are, without walking in from the
+gate.
+
+In the browser, a resident with no event for ten minutes walks home on its
+own and sits on its porch for half an hour before it is forgotten. A new event
+for that session wakes it up. Nothing here claims Hermes ended the session; it
+is only what the town shows when the stream goes quiet.
+
 ## Operator runbook
 
 ### 1. Install the source package

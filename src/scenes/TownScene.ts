@@ -346,11 +346,23 @@ export class TownScene extends Phaser.Scene {
     sim.update(dt);
 
     const seen = new Set<string>();
+    const view = this.cameras.main.worldView;
+    const crowd = sim.residents.size;
+    const zoom = this.cameras.main.zoom;
     for (const r of sim.residents.values()) {
       seen.add(r.id);
       let v = this.views.get(r.id);
       if (!v) v = this.makeView(r);
+      // off-screen residents keep simulating but cost nothing to draw
+      const onScreen = r.x > view.x - 48 && r.x < view.right + 48 && r.y > view.y - 64 && r.y < view.bottom + 48;
+      if (!onScreen) {
+        if (v.sprite.visible) { v.sprite.setVisible(false); v.shadow.setVisible(false); v.name.setVisible(false); v.bubble.setVisible(false); v.bubbleBg.setVisible(false); v.emote.setVisible(false); }
+        continue;
+      }
+      if (!v.sprite.visible) { v.sprite.setVisible(true); v.shadow.setVisible(true); }
       this.syncView(v, r, dt);
+      // name tags are a budget: past a crowd, or zoomed out, only the selected one keeps its tag
+      v.name.setVisible(this.selected === r.id || (zoom >= 2 && crowd <= 80));
     }
     for (const [id, v] of this.views) {
       if (seen.has(id)) continue;
@@ -418,9 +430,11 @@ export class TownScene extends Phaser.Scene {
   // ------------------------------------------------------------ residents
 
   private makeView(r: Resident): ResidentView {
-    const key = `char-${r.id}`;
+    // Looks are bucketed so a crowd shares sprite sheets: at most 16 per role.
+    const bucket = `${r.role}-${hashString(r.id) % 16}`;
+    const key = `char-${bucket}`;
     if (!this.textures.exists(key)) {
-      this.textures.addSpriteSheet(key, paintCharacterSheet(lookFor(r.id, r.role)) as unknown as HTMLImageElement, { frameWidth: FRAME_W * CHARACTER_SCALE, frameHeight: FRAME_H * CHARACTER_SCALE, endFrame: FRAME_COUNT - 1 });
+      this.textures.addSpriteSheet(key, paintCharacterSheet(lookFor(bucket, r.role)) as unknown as HTMLImageElement, { frameWidth: FRAME_W * CHARACTER_SCALE, frameHeight: FRAME_H * CHARACTER_SCALE, endFrame: FRAME_COUNT - 1 });
       for (const f of FACINGS) {
         this.anims.create({ key: `${key}-walk-${f}`, frames: [0, 1, 2, 3].map((i) => ({ key, frame: walkFrame(f, i) })), frameRate: 8, repeat: -1 });
       }

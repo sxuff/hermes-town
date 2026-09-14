@@ -71,6 +71,8 @@ export interface EventSink {
   push(event: TownEvent): void;
   /** Called when the server's stream identity changed: forget everything. */
   reset(): void;
+  /** Called after a full snapshot replay: residents were already here, so they need not walk in. */
+  settle?(): void;
 }
 
 export type SourceStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -82,4 +84,6 @@ export interface Source {
   status(): SourceStatus;
   /** Source clock, epoch seconds, aligned to the server when live. */
   now(): number;
+  /** Residents the last full snapshot deliberately left out, by reason. */
+  omitted?(): { departed: number; stale: number };
 }

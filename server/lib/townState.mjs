@@ -21,6 +21,13 @@ import { JOURNAL_VERSION, PUBLIC_VERSION, townEventBody } from './contract.mjs';
 export const LIMITS = Object.freeze({
   /** Distinct residents retained. Beyond this the coldest departed one goes. */
   maxAgents: 256,
+  /**
+   * A resident with no event for this long is treated as gone for the purpose
+   * of a fresh snapshot. Its journal entries are kept; a new client just does
+   * not meet it. A CLI that was closed without a session end is the common
+   * case.
+   */
+  staleSeconds: 15 * 60,
   /** Recent events retained per resident, on top of its current spawn event. */
   maxEventsPerAgent: 48,
   /** Ingress ids remembered for de-duplication. */
@@ -298,16 +305,32 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
         && expectedStreamId === streamId
         && since <= cursor
         && (retained.length === 0 || since >= retained[0].cursor - 1);
-      const selected = canIncrement
-        ? retained.filter((event) => event.cursor > since)
-        : retained;
+      const now = Math.max(lastAt, clock());
+      const omitted = { departed: 0, stale: 0 };
+      let selected;
+      if (canIncrement) {
+        selected = retained.filter((event) => event.cursor > since);
+      } else {
+        // A fresh client is shown the town as it is now: residents that have
+        // departed, and residents nothing has been heard from in a while, are
+        // left out. Their journal entries stay retained for the stream.
+        const skip = new Set();
+        for (const agent of agents.values()) {
+          const last = agent.events.length > 0 ? agent.events[agent.events.length - 1] : agent.spawn;
+          const lastEventAt = last ? last.at : 0;
+          if (agent.departed) { skip.add(agent.key); omitted.departed += 1; }
+          else if (now - lastEventAt > bounds.staleSeconds) { skip.add(agent.key); omitted.stale += 1; }
+        }
+        selected = retained.filter((event) => !skip.has(event.agentId));
+      }
       const events = selected.map(publicEvent);
       return {
         v: PUBLIC_VERSION,
         streamId,
         cursor,
-        at: Math.max(lastAt, clock()),
+        at: now,
         oldestCursor: retained.length > 0 ? retained[0].cursor : cursor,
+        omitted,
         events,
       };
     },

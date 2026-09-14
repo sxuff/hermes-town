@@ -14,6 +14,8 @@ const FAIL_SECONDS = 3;
 const GONE_AFTER_SECONDS = 1.2;
 /** How long a finished session sits on its porch before it is forgotten. */
 const REST_SECONDS = 30 * 60;
+/** A resident with no event for this long is not working any more: it goes home. */
+const IDLE_HOME_SECONDS = 10 * 60;
 const QUEUE_LIMIT = 2;
 const HISTORY_LIMIT = 14;
 
@@ -88,6 +90,27 @@ export class TownSim {
     this.log.length = 0;
     this.occupied.clear();
     this.porches.clear();
+  }
+
+  /**
+   * After a snapshot replay: everyone the snapshot described was already in
+   * town, so nobody walks in from the gate. Each resident jumps to wherever
+   * its current intent was taking it.
+   */
+  settle(): void {
+    for (const r of this.residents.values()) {
+      if (r.state === 'arriving') {
+        const next = r.queue.shift();
+        if (next) this.startIntent(r, next);
+      }
+      if ((r.state === 'moving' || r.state === 'leaving') && r.path.length > 0) {
+        const end = tileCenter(r.path[r.path.length - 1]!);
+        r.x = end.x; r.y = end.y; r.pathIndex = r.path.length - 1;
+        this.arrive(r);
+      }
+      r.history = r.history.filter((h) => h.text !== 'arrived in town' && h.text !== 'arrived to help');
+    }
+    this.log.length = 0;
   }
 
   /** Residents that still represent a live execution context. */
@@ -341,6 +364,16 @@ export class TownSim {
     for (const r of this.residents.values()) {
       r.clock += dt;
       if (r.emote && this.time > r.emoteUntil) r.emote = null;
+      // nothing heard for a long while: the session is over as far as the town can tell
+      if ((r.state === 'working' || r.state === 'idle' || r.state === 'celebrating' || r.state === 'failed' || r.state === 'arriving')
+        && this.time - r.lastEventAt > IDLE_HOME_SECONDS) {
+        r.queue.length = 0;
+        r.intent = null;
+        this.leaveStation(r);
+        this.goHome(r);
+        this.note(r, 'went quiet, went home');
+        continue;
+      }
       switch (r.state) {
         case 'arriving':
         case 'idle':
