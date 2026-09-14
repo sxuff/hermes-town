@@ -1,0 +1,19 @@
+node_modules/
+dist/
+playwright-report/
+test-results/
+.vite/
+*.log
+*.tsbuildinfo
+.DS_Store
+__pycache__/
+
+# Keep final proof artifacts explicit. Ignore reproducible scratch QA evidence.
+artifacts/qa/
+output/playwright/
+.playwright-cli/
+
+# Live-server runtime state: the bounded event journal and anything else the
+# server writes while running. Never a credential — the bridge token lives in
+# the Hermes home, not here — but still machine-local state, not source.
+runtime/

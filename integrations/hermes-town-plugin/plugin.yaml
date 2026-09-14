@@ -1,0 +1,24 @@
+name: hermes-town
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: >-
+  Passive Hermes Town bridge. Publishes bounded, pseudonymous agent lifecycle
+  metadata to a same-host Town live server. Registers no tools, injects no
+  context, and returns no control directive.
+author: Hermes Town
+license: MIT
+homepage: https://github.com/sxuff/hermes-town
+tags: [visualization, observability, privacy]
+provides_tools: []
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - on_session_start
+  - on_session_end
+  - on_session_finalize
+  - on_session_reset
+  - subagent_start
+  - subagent_stop

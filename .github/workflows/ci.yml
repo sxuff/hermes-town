@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm run test:contracts
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run verify:world
+      - name: Install pinned Hermes validator
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
+          git -C /tmp/hermes-agent fetch --depth=1 origin 49c6d4a9e0dddc64d6333c5b1fcc9d911463a8fd
+          git -C /tmp/hermes-agent checkout --detach 49c6d4a9e0dddc64d6333c5b1fcc9d911463a8fd
+          python -m pip install -e /tmp/hermes-agent
+      - run: hermes plugins validate integrations/hermes-town-plugin

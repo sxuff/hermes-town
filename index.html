@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hermes Town</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud">
+      <div id="masthead">
+        <div class="kicker">hermes runtime interface</div>
+        <div class="title">Hermes Town</div>
+        <div id="status" class="status">starting</div>
+      </div>
+      <div id="controls">
+        <button id="overview">Town view</button>
+        <button data-goto="library">Library</button>
+        <button data-goto="workshop">Workshop</button>
+        <button data-goto="forge">Forge</button>
+        <button data-goto="post">Post office</button>
+        <button data-goto="observatory">Observatory</button>
+        <button data-goto="hall">Town hall</button>
+        <button data-goto="tavern">Tavern</button>
+        <button id="follow">Follow: off</button>
+      </div>
+      <div id="panel" hidden></div>
+      <canvas id="minimap" width="192" height="120"></canvas>
+      <div id="foot">drag to pan · scroll to zoom · click a resident</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

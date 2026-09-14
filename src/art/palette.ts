@@ -1,0 +1,47 @@
+/**
+ * One constrained palette: muted earth tones,
+ * olive greens, cold dusk shadows, warm lamp light, dark ink outlines.
+ */
+export const PAL = {
+  ink: '#1a1418',
+  outline: '#2a1f1c',
+  grass: '#66743a',
+  grass2: '#5c6b36',
+  grass3: '#737f40',
+  dirt: '#97703f',
+  dirt2: '#86603a',
+  cobble: '#7b736a',
+  cobble2: '#8a8176',
+  cobble3: '#66605a',
+  water: '#2f5566',
+  water2: '#3a6677',
+  wood: '#7a5230',
+  wood2: '#5d3d24',
+  wood3: '#9a6c3f',
+  plaster: '#d2b98f',
+  plaster2: '#b39d7c',
+  stone: '#8a8580',
+  stone2: '#6e6963',
+  roofBrown: '#8a4030',
+  roofBrown2: '#66301f',
+  roofSlate: '#3f4650',
+  roofSlate2: '#2f343c',
+  roofMoss: '#4f6b3a',
+  roofMoss2: '#3d5530',
+  roofPlum: '#5e3a6a',
+  roofPlum2: '#472a52',
+  glassDark: '#33404e',
+  lamp: '#f6c15a',
+  lampCore: '#fff0b8',
+  leaf: '#46662f',
+  leaf2: '#334d24',
+  leaf3: '#5f7d3a',
+  trunk: '#4a3322',
+  skin: '#e8b78f',
+  skin2: '#c98f6b',
+  smoke: '#8b8a8f',
+  ember: '#f28b3c',
+} as const;
+
+export const HAIR = ['#2a1b14', '#5a3a22', '#b3823f', '#d8c48a', '#7a2f26', '#3c3c44', '#c2c2c2'];
+export const CLOTH = ['#7a3a2a', '#3f5e7a', '#4f6b3a', '#6b4a7a', '#a0703a', '#4a4a56', '#7a6a3a', '#2f6b66'];
