@@ -8,10 +8,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  # Required: typecheck, production build, plugin privacy and server contract.
+  # These test the promises the town makes, not the choreography, so a change
+  # to how residents behave does not break them.
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,10 +29,40 @@ jobs:
         with:
           python-version: "3.12"
       - run: npm ci
-      - run: npm run test:contracts
       - run: npm run build
+      - run: npm run test:contracts
+
+  # Advisory: the browser walk-through of the world and the pinned Hermes
+  # plugin validator. Both depend on things outside this repository (a
+  # browser download, a clone of hermes-agent), so they report but do not
+  # block a merge.
+  world:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npx playwright install --with-deps chromium
       - run: npm run verify:world
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: world-screenshots
+          path: output/playwright/
+          if-no-files-found: ignore
       - name: Install pinned Hermes validator
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent

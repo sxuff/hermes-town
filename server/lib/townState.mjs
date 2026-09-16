@@ -307,6 +307,8 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
         && (retained.length === 0 || since >= retained[0].cursor - 1);
       const now = Math.max(lastAt, clock());
       const omitted = { departed: 0, stale: 0 };
+      /** Residents left out but seen in the last day, newest first, for the porches. */
+      const recent = [];
       let selected;
       if (canIncrement) {
         selected = retained.filter((event) => event.cursor > since);
@@ -318,8 +320,12 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
         for (const agent of agents.values()) {
           const last = agent.events.length > 0 ? agent.events[agent.events.length - 1] : agent.spawn;
           const lastEventAt = last ? last.at : 0;
-          if (agent.departed) { skip.add(agent.key); omitted.departed += 1; }
-          else if (now - lastEventAt > bounds.staleSeconds) { skip.add(agent.key); omitted.stale += 1; }
+          let left = false;
+          if (agent.departed) { skip.add(agent.key); omitted.departed += 1; left = true; }
+          else if (now - lastEventAt > bounds.staleSeconds) { skip.add(agent.key); omitted.stale += 1; left = true; }
+          if (left && agent.spawn && now - lastEventAt < 24 * 3600 && agent.key.startsWith('h/main/')) {
+            recent.push({ agentId: agent.key, displayName: agent.spawn.displayName, role: agent.role, at: lastEventAt });
+          }
         }
         selected = retained.filter((event) => !skip.has(event.agentId));
       }
@@ -331,6 +337,7 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
         at: now,
         oldestCursor: retained.length > 0 ? retained[0].cursor : cursor,
         omitted,
+        recent: recent.sort((a, b) => b.at - a.at).slice(0, 8),
         events,
       };
     },

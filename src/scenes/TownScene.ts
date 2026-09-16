@@ -58,6 +58,11 @@ export class TownScene extends Phaser.Scene {
   private sparks!: Phaser.GameObjects.Particles.ParticleEmitter;
   private selected: string | null = null;
   private following = false;
+  /** The director picks the camera when there is little happening and nobody has touched it. */
+  private director = true;
+  private directorTarget: string | null = null;
+  private userTouchedAt = -1e9;
+  private sceneClock = 0;
   private windClock = 0;
   private swaying: { obj: Phaser.GameObjects.Image; phase: number; amount: number }[] = [];
   private clouds!: Phaser.GameObjects.RenderTexture;
@@ -258,6 +263,7 @@ export class TownScene extends Phaser.Scene {
       if (Math.hypot(dx, dy) > 3) this.dragMoved = true;
       if (this.dragMoved) {
         this.userMoved = true;
+        this.userTouchedAt = this.sceneClock;
         if (this.following) this.setFollow(false);
         cam.setScroll(this.dragStart.sx - dx / cam.zoom, this.dragStart.sy - dy / cam.zoom);
       }
@@ -292,6 +298,9 @@ export class TownScene extends Phaser.Scene {
     this.setFollow(false);
     this.select(null);
     this.userMoved = false;
+    // asking for the town view is a choice: the director stands back for a while
+    this.userTouchedAt = this.sceneClock;
+    this.directorTarget = null;
     const cam = this.cameras.main;
     this.tweens.killTweensOf(cam);
     cam.panEffect.reset();
@@ -307,9 +316,45 @@ export class TownScene extends Phaser.Scene {
 
   selectedId(): string | null { return this.selected; }
 
+  setDirector(on: boolean): void {
+    this.director = on;
+    if (!on) { this.directorTarget = null; if (!this.following) this.cameras.main.stopFollow(); }
+  }
+
+  isDirector(): boolean { return this.director; }
+
+  /**
+   * With a few residents the camera should be where the action is. The
+   * director follows whoever most recently had something happen, at 3x,
+   * unless the user has moved the camera in the last 45 seconds or is
+   * following someone themselves.
+   */
+  private direct(): void {
+    const sim = this.opts.sim;
+    if (!this.director || this.following) return;
+    if (this.sceneClock - this.userTouchedAt < 45) return;
+    if (sim.active().length > 3) { if (this.directorTarget) { this.directorTarget = null; this.cameras.main.stopFollow(); } return; }
+    const pick = sim.mostRecent();
+    if (!pick) return;
+    // a runner on the move is the story; otherwise its session
+    let target = pick;
+    const runners = sim.runners().filter((r) => r.parentId === pick.id || pick.parentId === r.parentId);
+    const moving = runners.find((r) => r.state === 'moving' || r.state === 'returning');
+    if (moving) target = moving;
+    if (target.id === this.directorTarget) return;
+    const v = this.views.get(target.id);
+    if (!v) return;
+    this.directorTarget = target.id;
+    const cam = this.cameras.main;
+    this.tweens.killTweensOf(cam);
+    if (cam.zoom < 2.5) this.tweens.add({ targets: cam, zoom: 3, duration: 700, ease: 'Quad.easeInOut' });
+    cam.startFollow(v.sprite, true, 0.04, 0.04);
+  }
+
   setFollow(on: boolean): void {
     const cam = this.cameras.main;
     if (on) this.userMoved = true;
+    this.directorTarget = null;
     this.following = on;
     cam.stopFollow();
     if (!on) return;
@@ -323,6 +368,8 @@ export class TownScene extends Phaser.Scene {
     const b = this.opts.map.buildings.find((x) => x.id === place);
     if (!b) return;
     this.userMoved = true;
+    this.userTouchedAt = this.sceneClock;
+    this.directorTarget = null;
     this.setFollow(false);
     this.tweens.killTweensOf(this.cameras.main);
     this.tweens.add({ targets: this.cameras.main, zoom: 2.5, duration: 500, ease: 'Quad.easeInOut' });
@@ -331,6 +378,8 @@ export class TownScene extends Phaser.Scene {
 
   centerOn(x: number, y: number): void {
     this.userMoved = true;
+    this.userTouchedAt = this.sceneClock;
+    this.directorTarget = null;
     this.setFollow(false);
     this.cameras.main.pan(x, y, 300, 'Quad.easeOut');
   }
@@ -344,6 +393,7 @@ export class TownScene extends Phaser.Scene {
     const dt = Math.min(0.1, deltaMs / 1000);
     const { sim } = this.opts;
     sim.update(dt);
+    this.sceneClock += dt;
 
     const seen = new Set<string>();
     const view = this.cameras.main.worldView;
@@ -362,14 +412,16 @@ export class TownScene extends Phaser.Scene {
       if (!v.sprite.visible) { v.sprite.setVisible(true); v.shadow.setVisible(true); }
       this.syncView(v, r, dt);
       // name tags are a budget: past a crowd, or zoomed out, only the selected one keeps its tag
-      v.name.setVisible(this.selected === r.id || (zoom >= 2 && crowd <= 80));
+      v.name.setVisible(this.selected === r.id || (zoom >= 2 && crowd <= 80 && !(r.kind === 'runner' && zoom < 3)));
     }
     for (const [id, v] of this.views) {
       if (seen.has(id)) continue;
       v.sprite.destroy(); v.shadow.destroy(); v.name.destroy(); v.bubble.destroy(); v.bubbleBg.destroy(); v.emote.destroy();
       this.views.delete(id);
       if (this.selected === id) this.select(null);
+      if (this.directorTarget === id) { this.directorTarget = null; this.cameras.main.stopFollow(); }
     }
+    this.direct();
 
     const dark = this.darkness();
     for (const bv of this.buildingViews) {
@@ -431,7 +483,7 @@ export class TownScene extends Phaser.Scene {
 
   private makeView(r: Resident): ResidentView {
     // Looks are bucketed so a crowd shares sprite sheets: at most 16 per role.
-    const bucket = `${r.role}-${hashString(r.id) % 16}`;
+    const bucket = `${r.role}-${hashString(r.parentId ?? r.id) % 16}`;
     const key = `char-${bucket}`;
     if (!this.textures.exists(key)) {
       this.textures.addSpriteSheet(key, paintCharacterSheet(lookFor(bucket, r.role)) as unknown as HTMLImageElement, { frameWidth: FRAME_W * CHARACTER_SCALE, frameHeight: FRAME_H * CHARACTER_SCALE, endFrame: FRAME_COUNT - 1 });
@@ -443,7 +495,7 @@ export class TownScene extends Phaser.Scene {
         this.anims.create({ key: `${key}-work-${style}-${f}`, frames: [0, 1].map((i) => ({ key, frame: workFrame(style, f, i) })), frameRate: rate, repeat: -1 });
       }
     }
-    const sprite = this.add.sprite(r.x, r.y, key, walkFrame('down', 0)).setOrigin(0.5, 0.95).setScale(1 / CHARACTER_SCALE);
+    const sprite = this.add.sprite(r.x, r.y, key, walkFrame('down', 0)).setOrigin(0.5, 0.95).setScale((r.kind === 'runner' ? 0.8 : 1) / CHARACTER_SCALE);
     const shadow = this.add.image(r.x, r.y, 'shadow-char').setOrigin(0.5, 0.5);
     const name = this.add.text(r.x, r.y + 3, r.name, { fontFamily: 'monospace', fontSize: '5px', color: '#f3e6c9' }).setOrigin(0.5, 0).setResolution(6);
     const bubble = this.add.text(r.x, r.y - 30, '', { fontFamily: 'monospace', fontSize: '6px', color: '#1a1418' }).setOrigin(0.5, 1).setResolution(6);
@@ -464,7 +516,7 @@ export class TownScene extends Phaser.Scene {
     v.shadow.setAlpha(0.9 * alpha);
     v.name.setAlpha(0.9 * alpha);
     const selected = this.selected === r.id;
-    v.name.setColor(selected ? '#ffd36b' : r.isChild ? '#c9b58f' : '#f3e6c9');
+    v.name.setColor(selected ? '#ffd36b' : r.kind === 'runner' ? '#a9c4d6' : r.isChild ? '#c9b58f' : r.memory ? '#8f8677' : '#f3e6c9');
 
     let animKey: string;
     let flip = false;

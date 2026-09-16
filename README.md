@@ -108,3 +108,26 @@ hermes plugins doctor integrations/hermes-town-plugin --ci
 ## License
 
 Hermes Town, including the code and shipped original assets, is licensed under the [MIT License](LICENSE).
+
+## How events become behaviour
+
+A session is one resident, the coordinator. It thinks at a hall desk. Every
+tool call dispatches a runner: a smaller figure that leaves the desk, goes to
+that tool's building, works there for a few real seconds, and walks back with
+the result (a tick, or smoke if the tool failed). A turn with six tool calls
+is six runners fanning out across town while the coordinator sits thinking.
+When the turn ends the coordinator walks to the notice board in the square,
+pins the result, and goes to stand at its own front door with a "waiting for
+you" bubble until the next turn. Ten minutes of silence and it sits down on
+the porch; half an hour later it is forgotten. Subagents are full residents
+with their own runners. Sessions from earlier today sit dim on their porches.
+
+Every figure on screen is one session, one subagent, or one tool call. Nothing
+is invented to fill the frame.
+
+The director (a HUD toggle, on by default) follows whoever most recently had
+something happen when three or fewer sessions are active, at 3x, and backs
+off for 45 seconds whenever you move the camera yourself.
+
+The tool-to-building table in `src/sim/toolMap.ts` covers the Hermes tool
+registry and the common Claude Code names. Unknown tools go to the market.

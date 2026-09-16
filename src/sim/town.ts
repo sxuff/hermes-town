@@ -6,42 +6,67 @@ import { tileCenter, type Building, type Station, type TownMap } from '../world/
 import { findPath, nearestWalkable, type Point } from '../world/pathfind';
 import { IDLE_TARGET, THINK_TARGET, targetForTool, type Place, type ToolTarget } from './toolMap';
 
+/**
+ * The town model, crew edition.
+ *
+ * A session is one resident, the coordinator. It thinks at a hall desk. Every
+ * tool call it makes dispatches a runner: a smaller figure that leaves the
+ * desk, goes to that tool's building, works there for a few real seconds, and
+ * walks back with the result. A turn with six tool calls is six runners
+ * fanning out across town while the coordinator sits thinking. When the turn
+ * ends the coordinator walks to the notice board, pins the result, and goes
+ * to stand at its own front door, waiting for you. Nothing on screen is
+ * invented: every figure is one session, one subagent, or one tool call.
+ */
+
 export const WALK_SPEED = 44; // world px per second
-const MIN_WORK_SECONDS = 2.6;
-const HOLD_AFTER_WORK_SECONDS = 9;
+const RUNNER_WORK_SECONDS = 7;
+const RUNNER_HANDIN_SECONDS = 1.6;
+const MAX_RUNNERS_PER_SESSION = 6;
+const PIN_SECONDS = 3;
 const CELEBRATE_SECONDS = 2.2;
 const FAIL_SECONDS = 3;
 const GONE_AFTER_SECONDS = 1.2;
 /** How long a finished session sits on its porch before it is forgotten. */
 const REST_SECONDS = 30 * 60;
-/** A resident with no event for this long is not working any more: it goes home. */
+/** A remembered session from earlier today stays on its porch this long. */
+const MEMORY_SECONDS = 6 * 60 * 60;
+/** A resident waiting at its door for this long goes to sit on the porch. */
 const IDLE_HOME_SECONDS = 10 * 60;
-const QUEUE_LIMIT = 2;
 const HISTORY_LIMIT = 14;
 
-export type ResidentState = 'arriving' | 'moving' | 'working' | 'idle' | 'celebrating' | 'failed' | 'leaving' | 'resting' | 'gone';
+export type ResidentState =
+  | 'arriving' | 'moving' | 'working' | 'idle' | 'celebrating' | 'failed'
+  | 'pinning' | 'waiting' | 'returning' | 'handing' | 'leaving' | 'resting' | 'gone';
 export type Anim = 'walk' | 'stand' | 'work' | 'sit';
+export type ResidentKind = 'session' | 'runner';
 
 export interface Intent {
   target: ToolTarget;
   tool: string | null;
   home?: boolean;
+  /** Walk to this tile instead of a station. */
+  tile?: Point;
 }
 
 export interface Resident {
   id: string;
+  kind: ResidentKind;
+  /** The session a runner belongs to. */
+  parentId: string | null;
   name: string;
   role: RoleClass;
   title: string | null;
   home: Building;
   isChild: boolean;
+  /** Remembered from earlier today: sits on the porch, was not seen live. */
+  memory: boolean;
   x: number;
   y: number;
   facing: Facing;
   anim: Anim;
   style: WorkStyle;
   state: ResidentState;
-  /** Porch tile held while resting, or null. */
   porch: Point | null;
   place: Place | null;
   station: Station | null;
@@ -49,10 +74,14 @@ export interface Resident {
   queue: Intent[];
   path: Point[];
   pathIndex: number;
-  /** Seconds left before the resident may leave its current station. */
+  /** Seconds left before the resident may leave its current spot. */
   hold: number;
-  /** Seconds the resident has been standing without a new event. */
+  /** Seconds since the last event. */
   quiet: number;
+  /** A runner whose tool has finished may return once its minimum time is up. */
+  done: boolean;
+  /** A runner whose tool failed comes back with smoke. */
+  failed: boolean;
   bubble: string | null;
   emote: 'ok' | 'fail' | 'think' | 'zzz' | 'wait' | null;
   emoteUntil: number;
@@ -60,26 +89,40 @@ export interface Resident {
   lastEventAt: number;
   spawnedAt: number;
   fade: number;
-  /** Animation clock in seconds. */
   clock: number;
   seq: number;
+  runnerCount: number;
 }
 
 export interface SimEvent { at: number; text: string; residentId: string }
+
+export interface RememberedSession { agentId: string; displayName?: string; role?: RoleClass; at: number }
 
 export class TownSim {
   readonly residents = new Map<string, Resident>();
   readonly departed: Resident[] = [];
   readonly log: SimEvent[] = [];
+  /** Completed turns pinned to the notice board today, newest first. */
+  readonly board: { at: number; name: string; text: string }[] = [];
   private occupied = new Map<string, string>();
   private porches = new Set<string>();
   private time = 0;
+  private runnerSerial = 0;
+  private boardTile: Point;
   /** Building activity, 0..1, drives lit windows and chimney smoke. */
   readonly activity = new Map<Place, number>();
 
   constructor(readonly map: TownMap) {
     for (const b of map.buildings) this.activity.set(b.kind as Place, 0);
     this.activity.set('market', 0);
+    // the notice board nearest the fountain is where turns get pinned
+    const fountain = map.props.find((p) => p.kind === 'fountain');
+    const boards = map.props.filter((p) => p.kind === 'noticeBoard');
+    const fx = fountain ? fountain.x : (map.grid.w * TILE) / 2, fy = fountain ? fountain.y : (map.grid.h * TILE) / 2;
+    boards.sort((a, b) => Math.hypot(a.x - fx, a.y - fy) - Math.hypot(b.x - fx, b.y - fy));
+    const b = boards[0];
+    const guess = b ? { x: Math.floor((b.x + 12) / TILE), y: Math.floor(b.y / TILE) + 2 } : { x: Math.floor(fx / TILE), y: Math.floor(fy / TILE) + 3 };
+    this.boardTile = nearestWalkable(map.grid, guess) ?? map.entrance;
   }
 
   now(): number { return this.time; }
@@ -88,14 +131,37 @@ export class TownSim {
     this.residents.clear();
     this.departed.length = 0;
     this.log.length = 0;
+    this.board.length = 0;
     this.occupied.clear();
     this.porches.clear();
   }
 
+  /** Sessions and subagents that still represent a live execution context. */
+  active(): Resident[] {
+    return [...this.residents.values()].filter((r) => r.kind === 'session' && !r.memory && r.state !== 'resting' && r.state !== 'gone');
+  }
+
+  runners(): Resident[] {
+    return [...this.residents.values()].filter((r) => r.kind === 'runner' && r.state !== 'gone');
+  }
+
+  remembered(): Resident[] {
+    return [...this.residents.values()].filter((r) => r.memory);
+  }
+
+  /** The resident that most recently had something happen to it. */
+  mostRecent(): Resident | null {
+    let best: Resident | null = null;
+    for (const r of this.residents.values()) {
+      if (r.state === 'gone' || r.state === 'resting') continue;
+      if (!best || r.lastEventAt > best.lastEventAt) best = r;
+    }
+    return best;
+  }
+
   /**
    * After a snapshot replay: everyone the snapshot described was already in
-   * town, so nobody walks in from the gate. Each resident jumps to wherever
-   * its current intent was taking it.
+   * town, so nobody walks in from the gate.
    */
   settle(): void {
     for (const r of this.residents.values()) {
@@ -103,7 +169,7 @@ export class TownSim {
         const next = r.queue.shift();
         if (next) this.startIntent(r, next);
       }
-      if ((r.state === 'moving' || r.state === 'leaving') && r.path.length > 0) {
+      if ((r.state === 'moving' || r.state === 'leaving' || r.state === 'returning') && r.path.length > 0) {
         const end = tileCenter(r.path[r.path.length - 1]!);
         r.x = end.x; r.y = end.y; r.pathIndex = r.path.length - 1;
         this.arrive(r);
@@ -113,9 +179,25 @@ export class TownSim {
     this.log.length = 0;
   }
 
-  /** Residents that still represent a live execution context. */
-  active(): Resident[] {
-    return [...this.residents.values()].filter((r) => r.state !== 'resting' && r.state !== 'gone');
+  /** Sessions from earlier today, shown sitting on their porches. */
+  remember(list: RememberedSession[]): void {
+    for (const m of list) {
+      if (this.residents.has(m.agentId)) continue;
+      const r = this.makeResident(m.agentId, m.displayName ?? `Agent ${m.agentId.slice(-4)}`, m.role ?? 'general', 'session', null);
+      r.memory = true;
+      const spot = r.home.porch.find((p) => !this.porches.has(`${p.x},${p.y}`));
+      if (!spot) continue;
+      this.porches.add(`${spot.x},${spot.y}`);
+      r.porch = spot;
+      const c = tileCenter(spot);
+      r.x = c.x; r.y = c.y;
+      r.state = 'resting';
+      r.anim = 'sit';
+      r.facing = 'down';
+      r.hold = MEMORY_SECONDS;
+      r.history = [{ at: this.time, text: 'earlier today' }];
+      this.residents.set(r.id, r);
+    }
   }
 
   // ---------------------------------------------------------------- events
@@ -128,7 +210,8 @@ export class TownSim {
     }
     if (e.seq <= r.seq) return;
     r.seq = e.seq;
-    if (r.state === 'resting' && e.type !== 'agent.departed') this.wake(r);
+    if (r.memory) { r.memory = false; r.history = []; }
+    if ((r.state === 'resting' || r.state === 'waiting') && e.type !== 'agent.departed') this.wake(r);
     r.lastEventAt = this.time;
     r.quiet = 0;
     if (e.title && !r.title) r.title = e.title;
@@ -136,44 +219,59 @@ export class TownSim {
       case 'agent.spawned':
         break;
       case 'agent.assigned':
-        if (r.state === 'arriving' || r.state === 'idle' && r.place !== 'hall' && r.queue.length === 0 && !r.intent) {
+        // a turn begins: think at the hall
+        if (r.place !== 'hall' && !(r.intent && r.intent.target.place === 'hall' && r.state === 'moving')) {
+          r.queue.length = 0;
           this.enqueue(r, { target: THINK_TARGET, tool: null });
-        } else if (r.state === 'working' || r.state === 'idle') {
+        } else {
           this.setEmote(r, 'think', 2.5);
-          if (r.state === 'working') r.anim = 'stand';
         }
         this.note(r, e.action ?? 'turn started');
         break;
       case 'agent.tool_started': {
         const tool = e.tool ?? 'tool';
-        this.enqueue(r, { target: targetForTool(tool), tool });
+        this.dispatch(r, tool);
         this.note(r, tool);
         break;
       }
-      case 'agent.waiting':
-        if (r.state === 'working') {
-          r.hold = Math.min(r.hold, 1.2);
-          r.bubble = r.bubble ? `${r.bubble} ✓` : null;
-        }
+      case 'agent.waiting': {
+        // the tool came back: the runner that has been out longest may return
+        const runner = this.runnersOf(r).find((x) => !x.done);
+        if (runner) runner.done = true;
         break;
-      case 'agent.completed':
+      }
+      case 'agent.completed': {
+        // the turn is over: runners come home, the coordinator pins the result
+        for (const runner of this.runnersOf(r)) runner.done = true;
         r.queue.length = 0;
-        r.state = r.state === 'moving' ? 'moving' : 'celebrating';
-        if (r.state === 'celebrating') { r.hold = CELEBRATE_SECONDS; r.anim = 'stand'; }
-        r.bubble = null;
         this.setEmote(r, 'ok', CELEBRATE_SECONDS);
+        this.board.unshift({ at: this.time, name: r.name, text: e.action ?? 'turn completed' });
+        if (this.board.length > 12) this.board.length = 12;
+        this.enqueue(r, { target: { place: 'hall', style: 'desk', verb: 'pinning' }, tool: null, tile: this.boardTile });
         this.note(r, e.action ?? 'completed');
         break;
-      case 'agent.failed':
-        r.queue.length = 0;
-        r.state = r.state === 'moving' ? 'moving' : 'failed';
-        if (r.state === 'failed') { r.hold = FAIL_SECONDS; r.anim = 'stand'; }
-        r.bubble = null;
-        this.setEmote(r, 'fail', FAIL_SECONDS);
-        this.note(r, e.reason ?? 'failed');
+      }
+      case 'agent.failed': {
+        const runner = this.runnersOf(r).find((x) => !x.done);
+        if (runner) {
+          // a tool failed: that runner comes back with smoke
+          runner.done = true;
+          runner.failed = true;
+          this.note(r, `${runner.name} failed`);
+        } else {
+          for (const x of this.runnersOf(r)) x.done = true;
+          r.queue.length = 0;
+          r.state = r.state === 'moving' ? 'moving' : 'failed';
+          if (r.state === 'failed') { r.hold = FAIL_SECONDS; r.anim = 'stand'; }
+          r.bubble = null;
+          this.setEmote(r, 'fail', FAIL_SECONDS);
+          this.note(r, e.reason ?? 'failed');
+        }
         break;
+      }
       case 'agent.departed':
         if (r.state === 'resting') break;
+        for (const x of this.runnersOf(r)) x.done = true;
         r.queue.length = 0;
         r.intent = null;
         this.leaveStation(r);
@@ -183,50 +281,55 @@ export class TownSim {
     }
   }
 
-  private spawn(e: TownEvent): Resident {
-    const isChild = e.agentId.includes('/child/');
-    const h = hashString(e.agentId);
-    const home = this.map.homes[h % this.map.homes.length]!;
-    const role = e.role ?? 'general';
-    const start = this.map.entrance;
-    const pos = tileCenter(start);
-    const r: Resident = {
-      id: e.agentId,
-      name: e.displayName ?? `Agent ${e.agentId.slice(-4)}`,
-      role,
-      title: e.title ?? null,
-      home,
-      isChild,
-      x: pos.x,
-      y: pos.y,
-      facing: 'up',
-      anim: 'stand',
-      style: 'desk',
-      state: 'arriving',
-      porch: null,
-      place: null,
-      station: null,
-      intent: null,
-      queue: [],
-      path: [],
-      pathIndex: 0,
-      hold: 0,
-      quiet: 0,
-      bubble: null,
-      emote: null,
-      emoteUntil: 0,
-      history: [],
-      lastEventAt: this.time,
-      spawnedAt: this.time,
-      fade: 1,
-      clock: Math.random() * 10,
-      seq: 0,
+  private makeResident(id: string, name: string, role: RoleClass, kind: ResidentKind, parentId: string | null): Resident {
+    const isChild = id.includes('/child/');
+    const home = this.map.homes[hashString(parentId ?? id) % this.map.homes.length]!;
+    const pos = tileCenter(this.map.entrance);
+    return {
+      id, kind, parentId, name, role, title: null, home, isChild, memory: false,
+      x: pos.x, y: pos.y, facing: 'up', anim: 'stand', style: 'desk', state: 'arriving',
+      porch: null, place: null, station: null, intent: null, queue: [], path: [], pathIndex: 0,
+      hold: 0, quiet: 0, done: false, failed: false, bubble: null, emote: null, emoteUntil: 0,
+      history: [], lastEventAt: this.time, spawnedAt: this.time, fade: 1, clock: Math.random() * 10, seq: 0, runnerCount: 0,
     };
+  }
+
+  private spawn(e: TownEvent): Resident {
+    const r = this.makeResident(e.agentId, e.displayName ?? `Agent ${e.agentId.slice(-4)}`, e.role ?? 'general', 'session', null);
+    r.title = e.title ?? null;
     this.residents.set(r.id, r);
-    this.note(r, isChild ? 'arrived to help' : 'arrived in town');
-    // walk in from the gate and check in at the hall
+    this.note(r, r.isChild ? 'arrived to help' : 'arrived in town');
     this.enqueue(r, { target: { place: 'hall', style: 'desk', verb: 'checking in' }, tool: null });
     return r;
+  }
+
+  private runnersOf(r: Resident): Resident[] {
+    const out: Resident[] = [];
+    for (const x of this.residents.values()) if (x.kind === 'runner' && x.parentId === r.id && x.state !== 'gone' && x.state !== 'returning' && x.state !== 'handing') out.push(x);
+    out.sort((a, b) => a.spawnedAt - b.spawnedAt);
+    return out;
+  }
+
+  /** A tool call leaves the coordinator's side as a runner. */
+  private dispatch(r: Resident, tool: string): void {
+    const target = targetForTool(tool);
+    const label = tool.replace(/^mcp__.*?__/, '');
+    const out = this.runnersOf(r);
+    if (out.length >= MAX_RUNNERS_PER_SESSION) {
+      // too many out at once: the oldest is called back so the newest can go
+      out[0]!.done = true;
+    }
+    this.runnerSerial += 1;
+    const runner = this.makeResident(`${r.id}#r${this.runnerSerial}`, label, r.role, 'runner', r.id);
+    runner.x = r.x; runner.y = r.y;
+    runner.title = r.title;
+    runner.history = [{ at: this.time, text: `sent by ${r.name}` }];
+    this.residents.set(runner.id, runner);
+    r.runnerCount += 1;
+    this.startIntent(runner, { target, tool: label });
+    r.bubble = null;
+    this.setEmote(r, 'think', 2);
+    if (r.state === 'idle' || r.state === 'waiting') r.state = 'working';
   }
 
   private note(r: Resident, text: string): void {
@@ -242,24 +345,15 @@ export class TownSim {
   }
 
   private enqueue(r: Resident, intent: Intent): void {
-    // Same place as the current intent: refresh in place, no walk.
     const cur = r.intent;
-    if (cur && cur.target.place === intent.target.place && (r.state === 'working' || r.state === 'moving') && r.queue.length === 0) {
+    if (cur && !intent.tile && cur.target.place === intent.target.place && (r.state === 'working' || r.state === 'moving') && r.queue.length === 0) {
       cur.tool = intent.tool;
       cur.target = intent.target;
-      if (r.state === 'working') {
-        r.hold = Math.max(r.hold, MIN_WORK_SECONDS);
-        r.style = intent.target.style;
-        r.anim = intent.target.style === 'sit' ? 'sit' : 'work';
-        r.bubble = bubbleFor(intent);
-      }
+      if (r.state === 'working') { r.style = intent.target.style; r.bubble = bubbleFor(intent); }
       return;
     }
-    // Collapse: keep only the newest queued intents.
-    const last = r.queue[r.queue.length - 1];
-    if (last && last.target.place === intent.target.place) { r.queue[r.queue.length - 1] = intent; return; }
     r.queue.push(intent);
-    while (r.queue.length > QUEUE_LIMIT) r.queue.shift();
+    while (r.queue.length > 3) r.queue.shift();
   }
 
   // ------------------------------------------------------------- movement
@@ -276,7 +370,6 @@ export class TownSim {
       free.sort((a, b) => dist(a.tile, here) - dist(b.tile, here));
       return { station: free[0]!, tile: free[0]!.tile };
     }
-    // Everything is taken: stand near the building, visibly queued.
     const all = this.map.stations.filter((s) => s.place === place);
     const anchor = all[Math.floor(Math.random() * all.length)]!.tile;
     const spots: Point[] = [];
@@ -292,24 +385,28 @@ export class TownSim {
     return { station: null, tile };
   }
 
+  private walkTo(r: Resident, target: Point): void {
+    const from = nearestWalkable(this.map.grid, { x: Math.floor(r.x / TILE), y: Math.floor(r.y / TILE) }) ?? this.map.entrance;
+    const to = nearestWalkable(this.map.grid, target) ?? target;
+    r.path = findPath(this.map.grid, from, to) ?? [from, to];
+    r.pathIndex = 0;
+    r.anim = 'walk';
+  }
+
   private startIntent(r: Resident, intent: Intent): void {
     this.leaveStation(r);
     r.intent = intent;
     r.bubble = null;
     let target: Point;
-    if (intent.home) {
-      target = r.home.door;
-    } else {
+    if (intent.home) target = r.home.door;
+    else if (intent.tile) target = intent.tile;
+    else {
       const pick = this.stationFor(r, intent.target.place);
       if (pick.station) { this.occupied.set(pick.station.id, r.id); r.station = pick.station; }
       target = pick.tile;
     }
-    const from = nearestWalkable(this.map.grid, { x: Math.floor(r.x / TILE), y: Math.floor(r.y / TILE) }) ?? this.map.entrance;
-    const path = findPath(this.map.grid, from, target) ?? [from, target];
-    r.path = path;
-    r.pathIndex = 0;
+    this.walkTo(r, target);
     r.state = intent.home ? 'leaving' : 'moving';
-    r.anim = 'walk';
   }
 
   private wake(r: Resident): void {
@@ -318,6 +415,7 @@ export class TownSim {
     r.anim = 'stand';
     r.hold = 0;
     r.fade = 1;
+    r.bubble = null;
     this.note(r, 'back to work');
   }
 
@@ -325,9 +423,38 @@ export class TownSim {
     this.startIntent(r, { target: IDLE_TARGET, tool: null, home: true });
   }
 
+  /** The coordinator goes to stand at its own door, facing you. */
+  private goWait(r: Resident): void {
+    this.leaveStation(r);
+    r.intent = { target: IDLE_TARGET, tool: null, tile: r.home.door };
+    this.walkTo(r, r.home.door);
+    r.state = 'moving';
+  }
+
+  /** A runner heads back to whoever sent it. */
+  private returnRunner(runner: Resident): void {
+    this.leaveStation(runner);
+    const parent = runner.parentId ? this.residents.get(runner.parentId) : null;
+    const target = parent && parent.state !== 'gone' ? { x: Math.floor(parent.x / TILE), y: Math.floor(parent.y / TILE) + 1 } : runner.home.door;
+    runner.intent = { target: IDLE_TARGET, tool: null, tile: target };
+    this.walkTo(runner, target);
+    runner.state = 'returning';
+    runner.bubble = runner.failed ? '✗' : '✓';
+  }
+
   private arrive(r: Resident): void {
     const intent = r.intent;
     if (!intent) { r.state = 'idle'; r.anim = 'stand'; return; }
+    if (r.state === 'returning') {
+      r.state = 'handing';
+      r.anim = 'stand';
+      r.facing = 'up';
+      r.hold = RUNNER_HANDIN_SECONDS;
+      this.setEmote(r, r.failed ? 'fail' : 'ok', RUNNER_HANDIN_SECONDS);
+      const parent = r.parentId ? this.residents.get(r.parentId) : null;
+      if (parent && r.failed) this.setEmote(parent, 'fail', 2);
+      return;
+    }
     if (intent.home) {
       const spot = r.home.porch.find((p) => !this.porches.has(`${p.x},${p.y}`));
       if (spot) {
@@ -348,13 +475,33 @@ export class TownSim {
       r.anim = 'walk';
       return;
     }
+    if (intent.tile) {
+      if (intent.target.verb === 'pinning') {
+        r.state = 'pinning';
+        r.anim = 'work';
+        r.style = 'desk';
+        r.facing = 'up';
+        r.hold = PIN_SECONDS;
+        r.bubble = 'done';
+        return;
+      }
+      // at the front door, facing the street
+      r.state = 'waiting';
+      r.anim = 'stand';
+      r.facing = 'down';
+      r.hold = 0;
+      r.quiet = 0;
+      r.bubble = 'waiting for you';
+      r.place = null;
+      return;
+    }
     r.place = intent.target.place;
     r.style = intent.target.style;
     r.state = 'working';
     r.facing = r.station ? r.station.facing : 'down';
     r.anim = intent.target.style === 'sit' ? 'sit' : r.station ? 'work' : 'stand';
     if (r.station && r.station.prop.kind === 'barrel') r.anim = 'stand';
-    r.hold = MIN_WORK_SECONDS;
+    r.hold = r.kind === 'runner' ? RUNNER_WORK_SECONDS : 0;
     r.bubble = bubbleFor(intent);
     if (intent.target.verb === 'idle') { r.bubble = null; r.state = 'idle'; }
   }
@@ -364,14 +511,15 @@ export class TownSim {
     for (const r of this.residents.values()) {
       r.clock += dt;
       if (r.emote && this.time > r.emoteUntil) r.emote = null;
-      // nothing heard for a long while: the session is over as far as the town can tell
-      if ((r.state === 'working' || r.state === 'idle' || r.state === 'celebrating' || r.state === 'failed' || r.state === 'arriving')
-        && this.time - r.lastEventAt > IDLE_HOME_SECONDS) {
+      if (r.kind === 'runner') { this.updateRunner(r, dt); continue; }
+      // waited at the door long enough: sit down on the porch
+      if ((r.state === 'waiting' || r.state === 'idle' || r.state === 'working' || r.state === 'celebrating' || r.state === 'failed' || r.state === 'arriving')
+        && !r.memory && this.time - r.lastEventAt > IDLE_HOME_SECONDS) {
         r.queue.length = 0;
         r.intent = null;
         this.leaveStation(r);
         this.goHome(r);
-        this.note(r, 'went quiet, went home');
+        this.note(r, 'went quiet, sat down');
         continue;
       }
       switch (r.state) {
@@ -379,34 +527,40 @@ export class TownSim {
         case 'idle':
         case 'working':
         case 'celebrating':
-        case 'failed': {
+        case 'failed':
+        case 'pinning': {
           r.hold = Math.max(0, r.hold - dt);
           r.quiet += dt;
           if (r.hold > 0) break;
-          if (r.state === 'celebrating' || r.state === 'failed') {
-            // rest at the tavern until something new happens
-            r.state = 'idle';
-            if (r.queue.length === 0) this.enqueue(r, { target: IDLE_TARGET, tool: null });
-          }
+          if (r.state === 'pinning') { this.goWait(r); break; }
+          if (r.state === 'celebrating' || r.state === 'failed') r.state = 'idle';
           const next = r.queue.shift();
           if (next) { this.startIntent(r, next); break; }
-          if (r.state === 'working') {
-            // finished the visible work; stand and wait a while, then wander
-            if (r.anim === 'work') { r.anim = 'stand'; r.hold = HOLD_AFTER_WORK_SECONDS; break; }
-            if (r.place !== 'tavern') { this.enqueue(r, { target: IDLE_TARGET, tool: null }); break; }
-            r.state = 'idle';
+          if (r.state === 'working' && r.place === 'hall') {
+            // thinking: runners out means a busy desk, none means a pause
+            const out = this.runnersOf(r).length;
+            r.anim = out > 0 ? 'work' : 'stand';
+            r.bubble = out > 0 ? `${out} out` : r.quiet > 8 ? 'thinking' : null;
+            if (r.quiet > 45 && out === 0) { this.goWait(r); }
+            break;
           }
-          if (r.state === 'idle' && r.quiet > 30 && Math.random() < dt * 0.05) {
-            this.setEmote(r, 'zzz', 3);
-            r.quiet = 10;
+          if (r.state === 'working' && r.place !== 'hall') {
+            // a session that somehow works elsewhere: after a while, go think
+            if (r.quiet > 12) this.enqueue(r, { target: THINK_TARGET, tool: null });
+            break;
           }
+          if (r.state === 'idle' && r.quiet > 6) this.goWait(r);
+          break;
+        }
+        case 'waiting': {
+          r.quiet += dt;
+          if (r.quiet > 120 && Math.random() < dt * 0.04) { this.setEmote(r, 'zzz', 3); }
           break;
         }
         case 'moving':
-        case 'leaving': {
+        case 'leaving':
           this.step(r, dt);
           break;
-        }
         case 'resting': {
           r.hold -= dt;
           r.quiet += dt;
@@ -428,15 +582,52 @@ export class TownSim {
           }
           break;
         }
+        default:
+          break;
       }
     }
-    // building activity: proportion of stations in use, eased
     for (const place of this.activity.keys()) {
       const total = this.map.stations.filter((s) => s.place === place).length || 1;
       const used = [...this.residents.values()].filter((r) => r.place === place && r.state === 'working').length;
       const target = Math.min(1, used / Math.min(2, total));
       const cur = this.activity.get(place) ?? 0;
       this.activity.set(place, cur + (target - cur) * Math.min(1, dt * 1.5));
+    }
+  }
+
+  private updateRunner(r: Resident, dt: number): void {
+    switch (r.state) {
+      case 'arriving':
+      case 'moving':
+        if (r.state === 'arriving') { const next = r.queue.shift(); if (next) this.startIntent(r, next); break; }
+        this.step(r, dt);
+        break;
+      case 'working':
+      case 'idle': {
+        r.hold = Math.max(0, r.hold - dt);
+        r.quiet += dt;
+        // a runner works at least its minimum, then heads back once the tool is done;
+        // a tool that never reports back still returns after a long while
+        if (r.hold <= 0 && (r.done || r.quiet > 90)) this.returnRunner(r);
+        break;
+      }
+      case 'returning':
+        this.step(r, dt);
+        break;
+      case 'handing': {
+        r.hold -= dt;
+        if (r.hold <= 0) { r.state = 'gone'; r.hold = GONE_AFTER_SECONDS; }
+        break;
+      }
+      case 'gone': {
+        r.hold -= dt;
+        r.fade = Math.max(0, r.hold / GONE_AFTER_SECONDS);
+        if (r.hold <= 0) this.residents.delete(r.id);
+        break;
+      }
+      default:
+        r.state = 'gone'; r.hold = GONE_AFTER_SECONDS;
+        break;
     }
   }
 
@@ -459,7 +650,7 @@ export class TownSim {
 }
 
 function bubbleFor(intent: Intent): string | null {
-  if (intent.tool) return intent.tool.replace(/^mcp__.*?__/, '');
+  if (intent.tool) return intent.tool;
   if (intent.target.verb === 'idle') return null;
   return intent.target.verb;
 }
