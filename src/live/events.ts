@@ -73,6 +73,8 @@ export interface EventSink {
   reset(): void;
   /** Called after a full snapshot replay: residents were already here, so they need not walk in. */
   settle?(): void;
+  /** Sessions from earlier today that the snapshot left out: shown resting on their porches. */
+  remember?(list: { agentId: string; displayName?: string; role?: RoleClass; at: number }[]): void;
 }
 
 export type SourceStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';

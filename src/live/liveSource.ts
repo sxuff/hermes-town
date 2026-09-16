@@ -62,6 +62,15 @@ export function createLiveSource(sink: EventSink): Source {
         const o = body.omitted as Record<string, unknown> | undefined;
         omitted = { departed: typeof o?.departed === 'number' ? o.departed : 0, stale: typeof o?.stale === 'number' ? o.stale : 0 };
         sink.settle?.();
+        const recent = Array.isArray(body.recent) ? body.recent : [];
+        const list = recent.flatMap((m) => {
+          if (typeof m !== 'object' || m === null) return [];
+          const rec = m as Record<string, unknown>;
+          if (typeof rec.agentId !== 'string' || typeof rec.at !== 'number') return [];
+          const role = typeof rec.role === 'string' ? rec.role : undefined;
+          return [{ agentId: rec.agentId, displayName: typeof rec.displayName === 'string' ? rec.displayName : undefined, role: role as never, at: rec.at }];
+        });
+        if (list.length > 0) sink.remember?.(list);
       }
       return true;
     } catch {
