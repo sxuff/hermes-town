@@ -100,16 +100,31 @@ try {
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.once('error', reject);
-    child.once('exit', code => {
-      if (code !== 0) reject(new Error(`plugin delivery failed (${code}): ${stderr || stdout}`));
-      else resolve(JSON.parse(stdout));
+    // The report on stdout is the verdict. The interpreter's own exit status is
+    // not: a daemon delivery thread can still be winding down at shutdown.
+    child.once('close', code => {
+      let report = null;
+      try { report = JSON.parse(stdout.trim().split('\n').pop() ?? ''); } catch { report = null; }
+      if (report && typeof report.ok === 'boolean') resolve(report);
+      else reject(new Error(`plugin delivery produced no report (exit ${code}): ${stderr || stdout}`));
     });
   });
   assert.equal(childReport.ok, true);
 
+  // The emitted session ends, so the present-town snapshot deliberately leaves
+  // it out and says so; the journal still has it, which the incremental
+  // snapshot (the polling fallback's view) shows.
   const deliveredSnapshot = await (await fetch(`${base}/api/town/snapshot`)).json();
-  assert.ok(deliveredSnapshot.events.length > snapshot.events.length);
-  const deliveredText = JSON.stringify(deliveredSnapshot);
+  assert.ok(deliveredSnapshot.cursor > snapshot.cursor, 'delivery must advance the server cursor');
+  assert.ok(deliveredSnapshot.omitted.departed >= 1, 'a departed session is omitted from the present-town snapshot');
+  assert.equal(deliveredSnapshot.events.some((event) => event.agentId !== key), false, 'no departed resident in the present-town snapshot');
+  const incremental = await (await fetch(`${base}/api/town/snapshot?since=${snapshot.cursor}&stream=${encodeURIComponent(snapshot.streamId)}`)).json();
+  assert.ok(incremental.events.length > 0, 'the incremental snapshot replays the delivered events');
+  assert.ok(incremental.events.some((event) => event.type === 'agent.departed'));
+  for (const event of [...deliveredSnapshot.events, ...incremental.events]) {
+    for (const name of Object.keys(event)) assert.equal(PUBLIC_EVENT_KEYS.has(name), true, `unexpected public event field: ${name}`);
+  }
+  const deliveredText = JSON.stringify(deliveredSnapshot) + JSON.stringify(incremental);
   assert.equal(deliveredText.includes('HT_DELIVERY_PRIVATE_SENTINEL'), false);
   assert.equal(deliveredText.includes(token), false);
 
@@ -118,7 +133,8 @@ try {
     unauthorizedIngest: 401,
     unknownField: 400,
     acceptedIngest: 202,
-    publicEvents: deliveredSnapshot.events.length,
+    publicEvents: incremental.events.length,
+    omittedDeparted: deliveredSnapshot.omitted.departed,
     pluginDelivery: true,
     nonLoopbackBindRejected: true,
     privateSentinelAbsent: true,
