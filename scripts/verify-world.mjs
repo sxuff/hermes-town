@@ -69,6 +69,11 @@ try {
   }
 
   const zoom = () => page.evaluate(() => window.__town.game.scene.getScene('town').cameras.main.zoom);
+  // The director owns the camera by default; the camera checks below are about manual control.
+  await page.getByRole('button', { name: 'Director: on', exact: true }).click();
+  await page.waitForFunction(() => !window.__town.game.scene.getScene('town').isDirector());
+  await page.getByRole('button', { name: 'Town view', exact: true }).click();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const initialZoom = await zoom();
   await page.getByRole('button', { name: 'Library', exact: true }).click();
   await page.waitForFunction(() => Math.abs(window.__town.game.scene.getScene('town').cameras.main.zoom - 2.5) < 0.01);

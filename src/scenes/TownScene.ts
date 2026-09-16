@@ -298,6 +298,9 @@ export class TownScene extends Phaser.Scene {
     this.setFollow(false);
     this.select(null);
     this.userMoved = false;
+    // asking for the town view is a choice: the director stands back for a while
+    this.userTouchedAt = this.sceneClock;
+    this.directorTarget = null;
     const cam = this.cameras.main;
     this.tweens.killTweensOf(cam);
     cam.panEffect.reset();
