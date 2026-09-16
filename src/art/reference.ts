@@ -27,11 +27,44 @@ export class ReferenceArt {
       ctx.drawImage(image, 0, 0);
       const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const d = pixels.data;
-      for (let i = 0; i < d.length; i += 4) {
-        // Magenta is reserved for transparency in these source sheets. The
-        // channel difference also catches anti-aliased fringes around foliage.
-        if (Math.min(d[i]!, d[i + 2]!) > 130 && d[i]! > d[i + 1]! * 2 + 45 && d[i + 2]! > d[i + 1]! * 2 + 45) d[i + 3] = 0;
+      const w = canvas.width, h = canvas.height;
+      // Magenta is reserved for transparency in these source sheets. A pixel
+      // that is partly magenta is an anti-aliased edge: estimate how much of
+      // it is key, remove that share (despill), and keep the rest.
+      const keyness = new Float32Array(w * h);
+      for (let i = 0, k = 0; i < d.length; i += 4, k++) {
+        const r = d[i]!, g = d[i + 1]!, b = d[i + 2]!;
+        // distance from pure magenta, 0 = key, 1 = clearly not key
+        const dist = Math.max(255 - r, g, 255 - b) / 255;
+        const kn = Math.max(0, 1 - dist / 0.55);
+        keyness[k] = kn;
       }
+      for (let i = 0, k = 0; i < d.length; i += 4, k++) {
+        const kn = keyness[k]!;
+        if (kn >= 0.999) { d[i + 3] = 0; continue; }
+        if (kn <= 0) continue;
+        const a = 1 - kn;
+        // unmix: p = a * fg + (1 - a) * magenta
+        d[i] = Math.max(0, Math.min(255, Math.round((d[i]! - (1 - a) * 255) / a)));
+        d[i + 1] = Math.max(0, Math.min(255, Math.round(d[i + 1]! / a)));
+        d[i + 2] = Math.max(0, Math.min(255, Math.round((d[i + 2]! - (1 - a) * 255) / a)));
+        d[i + 3] = Math.round(255 * a);
+      }
+      // Pixel art wants a hard edge: thin, mostly-key edge pixels go, and the
+      // dark halo the generator painted around every object goes with them.
+      const alphaAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : d[(y * w + x) * 4 + 3]!;
+      const cut: number[] = [];
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const a = d[i + 3]!;
+        if (a === 0) continue;
+        const border = alphaAt(x - 1, y) < 40 || alphaAt(x + 1, y) < 40 || alphaAt(x, y - 1) < 40 || alphaAt(x, y + 1) < 40;
+        if (!border) continue;
+        const lum = (d[i]! + d[i + 1]! + d[i + 2]!) / 3;
+        const purplish = d[i]! > d[i + 1]! + 25 && d[i + 2]! > d[i + 1]! + 25;
+        if (a < 160 || (lum < 70 && purplish)) cut.push(i);
+      }
+      for (const i of cut) d[i + 3] = 0;
       ctx.putImageData(pixels, 0, 0);
       this.sheets.set(key, canvas);
     }
@@ -56,6 +89,12 @@ export class ReferenceArt {
     target.imageSmoothingEnabled = true;
     target.imageSmoothingQuality = 'high';
     target.drawImage(source, x + left, y + top, sw, sh, 0, 0, canvas.width, canvas.height);
+    // Downsampling blurs the silhouette into a soft grey rim. Snap alpha back
+    // to a hard edge so the sprite sits on the ground like everything else.
+    const out = target.getImageData(0, 0, canvas.width, canvas.height);
+    const od = out.data;
+    for (let i = 3; i < od.length; i += 4) od[i] = od[i]! < 120 ? 0 : 255;
+    target.putImageData(out, 0, 0);
     return canvas;
   }
 

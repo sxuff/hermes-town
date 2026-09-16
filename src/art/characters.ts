@@ -142,24 +142,43 @@ function drawResident(ctx: CanvasRenderingContext2D, look: Look, facing: Facing,
   line([[12.8, top + 1], [raised ? 12 : side ? 8.5 : 14, raised ? head - 0.5 : top + 3], [handX, handY]], ink, 3);
   line([[12.8, top + 1], [raised ? 12 : side ? 8.5 : 14, raised ? head - 0.5 : top + 3], [handX, handY]], look.cloth, 2);
   dot(handX - 0.65, handY - 0.6, look.skin, 1.5);
-  // Rounded face silhouette, shaded cheek and individually picked-out hair locks.
-  shape([[8, head], [11.5, head - 0.4], [13, head + 1.3], [12.6, head + 5], [11, head + 6.4], [8.5, head + 5.8], [side ? 6.7 : 7.5, head + 3.3]], back ? look.hair : look.skin);
-  if (!back) {
-    shape([[11.5, head + 1], [12.7, head + 1.4], [12.2, head + 5], [10.6, head + 6], [10.8, head + 3.8]], shade(look.skin, 0.8), false);
-    dot(side ? 7.5 : 8.2, head + 3, ink, 0.65);
-    if (!side) dot(11, head + 3, ink, 0.65);
-    line([[side ? 7.3 : 9, head + 5], [side ? 8.2 : 10.2, head + 5]], shade(look.skin, 0.66), 0.45);
-    if (look.beard) shape([[8, head + 4.5], [12.1, head + 4.7], [11, head + 6.6], [9.3, head + 6.3]], look.hair, false);
-  }
-  if (look.hairStyle !== 'bald') {
-    shape([[7.2, head + 1.8], [7.7, head - 0.4], [9, head - 1.1], [12, head - 0.6], [13.1, head + 0.8], [12.8, head + (back ? 5.2 : 3)], [11.9, head + 1.1], [9.5, head + 0.6], [8.4, head + 2.2]], look.hair);
-    for (let i = 0; i < 4; i++) line([[8.3 + i, head], [8.1 + i, head + 1.1]], shade(look.hair, 1.4), 0.45);
-    if (look.hairStyle === 'long' || look.hairStyle === 'bun') shape([[11.8, head + 1], [13.5, head + 2], [13, head + 7], [11.7, head + 5]], look.hair);
+  // The head is drawn on the texel grid with no strokes: a flat skin block, a
+  // hair cap, two dark eyes and nothing else. Faces at this size read as
+  // faces only when they say very little.
+  const px = (x: number, y: number, w: number, h: number, color: string) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); };
+  const headY = Math.round(head * 2) / 2;
+  const hairDark = shade(look.hair, 0.72);
+  const skinDark = shade(look.skin, 0.8);
+  px(7.5, headY - 0.5, 6, 7, ink);
+  if (back) {
+    px(8, headY, 5, 6, look.hairStyle === 'bald' ? look.skin : look.hair);
+    px(8, headY + 4, 5, 2, look.hairStyle === 'bald' ? skinDark : hairDark);
+    if (look.hairStyle === 'long') px(8.5, headY + 6, 4, 1.5, look.hair);
+  } else {
+    px(8, headY, 5, 6, look.skin);
+    px(12, headY + 1, 1, 5, skinDark);
+    px(8, headY + 5, 5, 1, skinDark);
+    if (side) { px(8.5, headY + 2.5, 1, 1, ink); }
+    else { px(9, headY + 2.5, 1, 1, ink); px(11, headY + 2.5, 1, 1, ink); }
+    if (look.beard) { px(8.5, headY + 4, 4, 2, look.hair); px(8.5, headY + 5.5, 4, 0.5, hairDark); }
+    if (look.hairStyle !== 'bald') {
+      px(8, headY, 5, 1.5, look.hair);
+      px(8, headY - 0.5, 5, 0.5, hairDark);
+      if (side) px(12, headY + 1, 1, 2, look.hair); else { px(8, headY + 1.5, 0.5, 1.5, look.hair); px(12.5, headY + 1.5, 0.5, 1.5, look.hair); }
+      if (look.hairStyle === 'long') { px(12, headY + 1, 1, 5.5, look.hair); if (!side) px(8, headY + 1, 1, 5.5, look.hair); }
+      if (look.hairStyle === 'bun') px(side ? 12.5 : 9.5, headY - 1.5, 2, 1.5, look.hair);
+      if (look.hairStyle === 'mohawk') px(10, headY - 1.5, 1.5, 2, look.hair);
+    } else {
+      px(8, headY - 0.5, 5, 0.5, skinDark);
+    }
   }
   if (look.hat !== 'none') {
-    const hat = look.hat === 'hood' ? look.cloth2 : leather;
-    shape([[6.8, head + 0.8], [7.8, head - 1.5], [11.8, head - 2], [13.4, head + 0.8]], hat);
-    line([[6.5, head + 1], [13.8, head + 1]], look.hat === 'goggles' ? '#b39d65' : leatherLight, look.hat === 'brim' ? 1.5 : 0.8);
+    const hatColour = look.hat === 'hood' ? look.cloth2 : leather;
+    if (look.hat === 'brim') { px(7, headY + 0.5, 7, 1, leather); px(8, headY - 1.5, 5, 2, hatColour); px(8, headY - 0.5, 5, 0.5, '#d9b34a'); }
+    else if (look.hat === 'cap') { px(7.5, headY - 0.5, 6, 2, hatColour); px(side ? 6.5 : 7, headY + 1, side ? 1.5 : 7, 0.5, hatColour); }
+    else if (look.hat === 'hood') { px(7.5, headY - 0.5, 6, 2.5, hatColour); px(7.5, headY + 2, 1, 4, hatColour); px(12.5, headY + 2, 1, 4, hatColour); }
+    else if (look.hat === 'band') { px(8, headY + 1.5, 5, 0.5, '#d9b34a'); }
+    else if (look.hat === 'goggles') { px(8, headY + 0.5, 5, 1, ink); px(9, headY + 0.5, 1, 1, '#7fb2dd'); if (!side) px(11, headY + 0.5, 1, 1, '#7fb2dd'); }
   }
   if (!working) return;
   const hx = handX, hy = handY;

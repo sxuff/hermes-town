@@ -124,10 +124,8 @@ export class TownScene extends Phaser.Scene {
       const litKey = `b-${b.id}-lit`, darkKey = `b-${b.id}-dark`;
       add(litKey, lit); add(darkKey, dark);
       const baseY = (b.y + b.h) * TILE;
-      // ground shadow cast to the lower-left of the footprint: cool, two-step
-      this.add.rectangle(b.x * TILE - 7, baseY + 7, b.w * TILE + 10, 8, 0x141a2e, 0.3).setOrigin(0, 1).setDepth(-5);
-      this.add.rectangle(b.x * TILE - 5, baseY + 3, b.w * TILE + 6, 4, 0x141a2e, 0.28).setOrigin(0, 1).setDepth(-5);
-      this.add.rectangle(b.x * TILE - 7, baseY, 6, b.h * TILE - 6, 0x141a2e, 0.26).setOrigin(0, 1).setDepth(-5);
+      // a soft pool of shadow under the wall, never a box
+      this.add.image((b.x + b.w / 2) * TILE, baseY + 2, 'shadow-tree').setScale((b.w * TILE) / 22, 1.1).setDepth(-5).setAlpha(0.35);
       if (b.kind === 'forge') this.dayLights.push({ x: (b.x + b.w / 2) * TILE, y: baseY + 6, scale: 1.1, tint: 0xf28b3c, alpha: 0.35 });
       else if (b.kind === 'tavern') this.dayLights.push({ x: (b.x + b.w / 2) * TILE, y: baseY + 4, scale: 0.9, tint: 0xf2c063, alpha: 0.22 });
       else if (b.kind === 'house') this.dayLights.push({ x: (b.x + b.w / 2) * TILE, y: baseY - 6, scale: 0.5, tint: 0xf6c15a, alpha: 0.12 });
@@ -179,8 +177,8 @@ export class TownScene extends Phaser.Scene {
           alpha: { start: 0.7, end: 0 }, tint: [0xa9d0d1, 0xe5e9d7],
         }).setDepth(foot + 1);
       }
-      if (placed.kind !== 'tree' && placed.kind !== 'banner') {
-        this.add.image(x, foot - 1, 'shadow-char').setScale(Math.max(0.8, w / 15), 0.75).setDepth(-3).setAlpha(0.4);
+      if (placed.kind === 'fountain' || placed.kind === 'chapel' || placed.kind === 'cart' || placed.kind.startsWith('marketStall')) {
+        this.add.image(x, foot - 2, 'shadow-tree').setScale(w / 22, 0.9).setDepth(-3).setAlpha(0.3);
       }
     }
 
