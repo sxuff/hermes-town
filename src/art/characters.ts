@@ -2,13 +2,16 @@ import { CLOTH, HAIR, PAL } from './palette';
 import { Painter, hashString, mulberry, outline, shade } from './painter';
 
 /**
- * Procedural character sheets, 20×30 frames.
+ * Resident sprites, drawn to the concept sheet: a big head under a wide brim,
+ * two dot eyes and nothing else on the face, a tunic with a satchel strap and
+ * a buckled belt, dark trousers, brown boots, and both arms always visible.
+ * Flat two-tone shading, one dark outline, no anti-aliasing anywhere.
  *
- * Layout (frame index):
+ * Frames are 20×30 texels, painted on that grid and blitted at 2× so they
+ * share the world's texel density. Layout (frame index):
  *   0..15   walk, 4 facings × 4 frames (contact, pass, contact, pass)
  *   16      sit (facing down)
  *   17..    work: for each style, 3 orientations (side, down, up) × 2 frames
- *
  * "side" is drawn facing left; the renderer flips it for right.
  */
 export const FRAME_W = 20;
@@ -53,18 +56,18 @@ export function lookFor(id: string, role: RoleClass): Look {
   const cloth = pick(CLOTH);
   const look: Look = {
     hair: pick(HAIR),
-    hairStyle: pick(['short', 'short', 'long', 'bun', 'bald', 'mohawk'] as const),
+    hairStyle: pick(['short', 'long', 'long', 'bun', 'short', 'bald', 'mohawk'] as const),
     cloth,
     cloth2: shade(cloth, 0.72),
-    pants: pick(['#3a3340', '#4a3a2a', '#2f3a44', '#5a4a3a']),
+    pants: pick(['#4a4548', '#3f3a44', '#4a3d36', '#3a4048']),
     skin: r() < 0.7 ? PAL.skin : PAL.skin2,
-    hat: 'none',
+    hat: r() < 0.35 ? 'brim' : 'none',
     apron: false,
-    beard: r() < 0.25,
-    belt: r() < 0.6,
+    beard: r() < 0.2,
+    belt: true,
   };
   switch (role) {
-    case 'coordinator': look.hat = 'brim'; look.cloth = pick(['#6b4a7a', '#3f5e7a', '#5a3d5c']); break;
+    case 'coordinator': look.hat = 'brim'; look.cloth = pick(['#6b4a7a', '#5e3f78', '#3f5e7a']); break;
     case 'research': look.hat = r() < 0.5 ? 'hood' : 'none'; look.cloth = pick(['#3f5e7a', '#2f6b66', '#4a4a56']); break;
     case 'fabrication': look.apron = true; look.hat = r() < 0.4 ? 'goggles' : 'none'; look.cloth = pick(['#7a3a2a', '#a0703a', '#7a6a3a']); break;
     case 'review': look.hat = 'band'; look.cloth = pick(['#4a4a56', '#7a6a3a', '#2f6b66']); break;
@@ -76,128 +79,250 @@ export function lookFor(id: string, role: RoleClass): Look {
   return look;
 }
 
-/** Layered cloth, hair, leather and articulated poses share the environment's
- * two-texel resolution. Frame indices remain the simulation's animation contract. */
+const INK = '#2a1f1c';
+const HAT = '#8a6a3f';
+const HAT_DARK = '#6b4f2e';
+const STRAP = '#5a3d24';
+const BUCKLE = '#d9b34a';
+const BOOT = '#7a4f2e';
+const BOOT_DARK = '#5a3820';
+const APRON = '#ad9270';
+const APRON_DARK = '#8a7454';
+
 export function paintCharacterSheet(look: Look): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
-  canvas.width = FRAME_W * FRAME_COUNT * CHARACTER_SCALE; canvas.height = FRAME_H * CHARACTER_SCALE;
+  canvas.width = FRAME_W * FRAME_COUNT * CHARACTER_SCALE;
+  canvas.height = FRAME_H * CHARACTER_SCALE;
   const ctx = canvas.getContext('2d')!;
-  ctx.scale(CHARACTER_SCALE, CHARACTER_SCALE);
-  const draw = (frame: number, facing: Facing, phase: number, style?: WorkStyle) => {
-    ctx.save(); ctx.translate(frame * FRAME_W, 0);
-    ctx.beginPath(); ctx.rect(0, 0, FRAME_W, FRAME_H); ctx.clip();
-    if (facing === 'right') { ctx.translate(FRAME_W, 0); ctx.scale(-1, 1); }
-    drawResident(ctx, look, facing === 'right' ? 'left' : facing, phase, style);
-    ctx.restore();
+  ctx.imageSmoothingEnabled = false;
+  const put = (index: number, frame: Painter) => {
+    ctx.drawImage(frame.canvas, index * FRAME_W * CHARACTER_SCALE, 0, FRAME_W * CHARACTER_SCALE, FRAME_H * CHARACTER_SCALE);
   };
-  for (const facing of FACINGS) for (let i = 0; i < 4; i++) draw(walkFrame(facing, i), facing, i);
-  draw(SIT_FRAME, 'down', 0, 'sit');
-  for (const style of WORK_STYLES) for (const facing of ['left', 'down', 'up'] as const) {
-    for (let i = 0; i < 2; i++) draw(workFrame(style, facing, i), facing, i, style);
+  for (const facing of FACINGS) for (let i = 0; i < 4; i++) put(walkFrame(facing, i), drawFrame(look, facing, 'walk', i));
+  put(SIT_FRAME, drawFrame(look, 'down', 'sit', 0));
+  for (const style of WORK_STYLES) for (const o of ORIENTS) for (let i = 0; i < 2; i++) {
+    const facing: Facing = o === 'side' ? 'left' : o;
+    put(workFrame(style, facing, i), drawFrame(look, facing, style, i));
   }
   return canvas;
 }
 
-function drawResident(ctx: CanvasRenderingContext2D, look: Look, facing: Facing, phase: number, style?: WorkStyle): void {
-  const side = facing === 'left', back = facing === 'up', sitting = style === 'sit';
-  const step = style ? 0 : [1.8, 0, -1.8, 0][phase]!;
-  const bob = !style && phase % 2 ? 0.5 : 0;
-  const ink = '#272720', leather = '#594333', leatherLight = '#92704b';
-  const shape = (points: number[][], color: string, edge = true) => {
-    ctx.beginPath(); points.forEach(([x, y], i) => i ? ctx.lineTo(x!, y!) : ctx.moveTo(x!, y!)); ctx.closePath();
-    ctx.fillStyle = color; ctx.fill();
-    if (edge) { ctx.strokeStyle = ink; ctx.lineWidth = 0.65; ctx.stroke(); }
+type Mode = 'walk' | WorkStyle;
+
+/** One 20×30 frame. `right` is painted as `left` and mirrored. */
+function drawFrame(look: Look, facing: Facing, mode: Mode, phase: number): Painter {
+  const p = new Painter(FRAME_W, FRAME_H);
+  const mirror = facing === 'right';
+  const f: Facing = mirror ? 'left' : facing;
+  const X = (x: number) => (mirror ? FRAME_W - 1 - x : x);
+  const px = (x: number, y: number, c: string) => { if (x >= 0 && y >= 0 && x < FRAME_W && y < FRAME_H) p.px(X(x), y, c); };
+  const rect = (x: number, y: number, w: number, h: number, c: string) => {
+    for (let j = 0; j < h; j++) for (let k = 0; k < w; k++) px(x + k, y + j, c);
   };
-  const line = (points: number[][], color: string, width = 0.6) => {
-    ctx.beginPath(); points.forEach(([x,y], i) => i ? ctx.lineTo(x!, y!) : ctx.moveTo(x!, y!));
-    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
-  };
-  const dot = (x: number, y: number, color: string, size = 0.6) => { ctx.fillStyle = color; ctx.fillRect(x, y, size, size); };
-  const head = 6 + bob + (sitting ? 3 : 0), waist = 20 + (sitting ? 1 : 0);
-  // Separate trouser legs and turned leather boots, articulated during walking.
-  for (const [x, swing] of [[7.7, step], [11, -step]]) {
-    const foot = sitting ? 27 : 28 - Math.max(0, swing!);
-    shape([[x!, waist - 2], [x! + 2.6, waist - 2], [x! + 2.2 + swing! * 0.25, foot - 2], [x! - 0.3 + swing! * 0.25, foot - 2]], look.pants);
-    const fx = x! + swing! * 0.25;
-    shape([[fx - 0.5, foot - 3], [fx + 2.2, foot - 3], [fx + 2.4, foot], [fx - (side ? 1.7 : 0.8), foot], [fx - 1, foot - 1]], leather);
-    line([[fx, foot - 2.5], [fx + 1.4, foot - 2.5]], leatherLight);
-  }
-  // Tapered coat hem, shoulder volume, seams, folds and belt hardware.
-  const top = head + 6;
-  shape([[7, top], [12.5, top], [14.4, top + 2], [13.6, waist - 3], [14, waist + 1], [10.5, waist + 2], [6, waist + 1], [6.8, waist - 3], [5.6, top + 2]], look.cloth);
-  shape([[6, top + 2], [7.5, top + 1], [8.2, waist], [6.2, waist + 0.7]], look.cloth2, false);
-  line([[9, top + 1], [8.6, waist - 2]], shade(look.cloth, 1.32), 0.7);
-  line([[12, top + 3], [11.8, waist]], shade(look.cloth, 0.7), 0.7);
-  if (look.apron) shape([[8, top + 1], [12, top + 1], [13, waist + 1], [7, waist + 1]], '#ad9270');
-  line([[6.8, waist - 2], [13.5, waist - 2]], leather, 1.2);
-  if (!back) { dot(10, waist - 2.5, '#cbb16d', 1.2); dot(10.4, waist - 2.2, leather, 0.5); }
-  shape([[side ? 11.5 : 13, waist - 2], [side ? 14 : 15.3, waist - 1.5], [side ? 14 : 15, waist + 2], [side ? 11.5 : 12.8, waist + 2]], leather);
-  line([[13, waist - 1], [14.4, waist - 1]], leatherLight);
-  // Bent arms make the tool lifecycle readable at the same station positions.
-  const working = style && !sitting;
-  const raised = (style === 'hammer' || style === 'bellows') && phase === 0;
-  const handX = side ? working ? (style === 'hammer' || style === 'bellows') && !raised ? 6.5 : 3.7 : 6 - step * 0.3 : 14.2;
-  const handY = raised ? head + 1 : working ? top + 4 + phase * 0.4 : top + 6 + step * 0.3;
-  line([[6.2, top + 1], [5.6, top + 4], [side ? 7 : 5, top + 6 - step * 0.25]], ink, 3);
-  line([[6.2, top + 1], [5.6, top + 4], [side ? 7 : 5, top + 6 - step * 0.25]], look.cloth2, 2);
-  line([[12.8, top + 1], [raised ? 12 : side ? 8.5 : 14, raised ? head - 0.5 : top + 3], [handX, handY]], ink, 3);
-  line([[12.8, top + 1], [raised ? 12 : side ? 8.5 : 14, raised ? head - 0.5 : top + 3], [handX, handY]], look.cloth, 2);
-  dot(handX - 0.65, handY - 0.6, look.skin, 1.5);
-  // The head is drawn on the texel grid with no strokes: a flat skin block, a
-  // hair cap, two dark eyes and nothing else. Faces at this size read as
-  // faces only when they say very little.
-  const px = (x: number, y: number, w: number, h: number, color: string) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); };
-  const headY = Math.round(head * 2) / 2;
-  const hairDark = shade(look.hair, 0.72);
-  const skinDark = shade(look.skin, 0.8);
-  px(7.5, headY - 0.5, 6, 7, ink);
-  if (back) {
-    px(8, headY, 5, 6, look.hairStyle === 'bald' ? look.skin : look.hair);
-    px(8, headY + 4, 5, 2, look.hairStyle === 'bald' ? skinDark : hairDark);
-    if (look.hairStyle === 'long') px(8.5, headY + 6, 4, 1.5, look.hair);
+
+  const side = f === 'left', back = f === 'up';
+  const walking = mode === 'walk';
+  const sitting = mode === 'sit';
+  const working = !walking && !sitting;
+  const stride = walking ? [1, 0, -1, 0][phase]! : 0;
+  const bob = walking && phase % 2 === 1 ? 1 : 0;
+  const oy = sitting ? 4 : bob;           // head and torso shift; feet stay on the ground
+  const hairDark = shade(look.hair, 0.7);
+  const skinDark = shade(look.skin, 0.82);
+  const pantsDark = shade(look.pants, 0.78);
+  const hand = (x: number, y: number) => rect(x, y, 2, 2, look.skin);
+
+  // ------------------------------------------------------------- legs
+  const legTop = 21 + oy;
+  if (sitting) {
+    rect(5, 22, 10, 3, look.pants);
+    rect(5, 24, 10, 1, pantsDark);
+    rect(4, 25, 3, 3, BOOT); rect(13, 25, 3, 3, BOOT);
+    rect(4, 27, 3, 1, BOOT_DARK); rect(13, 27, 3, 1, BOOT_DARK);
+  } else if (side) {
+    const backX = 9 + stride, frontX = 8 - stride;
+    rect(backX, legTop, 3, 5, pantsDark);
+    rect(backX - 1, 26, 4, 3, BOOT_DARK);
+    rect(frontX, legTop, 3, 5, look.pants);
+    rect(frontX - 2, 26, 5, 3, BOOT);
+    rect(frontX - 2, 28, 5, 1, BOOT_DARK);
   } else {
-    px(8, headY, 5, 6, look.skin);
-    px(12, headY + 1, 1, 5, skinDark);
-    px(8, headY + 5, 5, 1, skinDark);
-    if (side) { px(8.5, headY + 2.5, 1, 1, ink); }
-    else { px(9, headY + 2.5, 1, 1, ink); px(11, headY + 2.5, 1, 1, ink); }
-    if (look.beard) { px(8.5, headY + 4, 4, 2, look.hair); px(8.5, headY + 5.5, 4, 0.5, hairDark); }
-    if (look.hairStyle !== 'bald') {
-      px(8, headY, 5, 1.5, look.hair);
-      px(8, headY - 0.5, 5, 0.5, hairDark);
-      if (side) px(12, headY + 1, 1, 2, look.hair); else { px(8, headY + 1.5, 0.5, 1.5, look.hair); px(12.5, headY + 1.5, 0.5, 1.5, look.hair); }
-      if (look.hairStyle === 'long') { px(12, headY + 1, 1, 5.5, look.hair); if (!side) px(8, headY + 1, 1, 5.5, look.hair); }
-      if (look.hairStyle === 'bun') px(side ? 12.5 : 9.5, headY - 1.5, 2, 1.5, look.hair);
-      if (look.hairStyle === 'mohawk') px(10, headY - 1.5, 1.5, 2, look.hair);
+    const l = Math.max(0, stride), r = Math.max(0, -stride);
+    rect(5, legTop, 4, 5 + l - oy, look.pants);
+    rect(11, legTop, 4, 5 + r - oy, look.pants);
+    rect(5, 26 + l, 4, 3 - l, BOOT); rect(11, 26 + r, 4, 3 - r, BOOT);
+    rect(5, 28, 4, 1, BOOT_DARK); rect(11, 28, 4, 1, BOOT_DARK);
+    if (!back) { px(8, legTop, pantsDark); px(11, legTop, pantsDark); }
+  }
+
+  // ------------------------------------------------------------- back arm (side view), behind the body
+  const shoulder = 13 + oy;
+  const armLen = 6;
+  if (side && !sitting) {
+    const raised = working && (mode === 'hammer' || mode === 'bellows') && phase === 0;
+    if (!raised) { rect(13, shoulder + 1 - stride, 2, armLen, look.cloth2); rect(13, shoulder + 1 - stride + armLen, 2, 2, skinDark); }
+  }
+
+  // ------------------------------------------------------------- torso
+  const torsoTop = 12 + oy;
+  if (side) {
+    rect(6, torsoTop, 8, 9, look.cloth);
+    rect(12, torsoTop, 2, 9, look.cloth2);
+    rect(6, torsoTop + 8, 8, 1, look.cloth2);
+  } else {
+    rect(5, torsoTop, 10, 9, look.cloth);
+    rect(5, torsoTop + 8, 10, 1, look.cloth2);
+    rect(13, torsoTop + 1, 2, 7, look.cloth2);
+    if (!back) { px(9, torsoTop, look.cloth2); px(10, torsoTop, look.cloth2); }
+  }
+  if (look.apron && !back) {
+    rect(6, torsoTop + 2, side ? 6 : 8, 8, APRON);
+    rect(6, torsoTop + 2, side ? 6 : 8, 1, APRON_DARK);
+    rect(side ? 6 : 7, torsoTop + 9, 6, 1, APRON_DARK);
+  }
+  // satchel strap across the chest, or the back
+  if (!side) {
+    for (let i = 0; i < 7; i++) { const sx = back ? 6 + i : 13 - i; px(sx, torsoTop + i, STRAP); }
+    if (!back) rect(5, torsoTop + 5, 2, 3, STRAP);
+  } else {
+    rect(11, torsoTop, 2, 7, STRAP);
+    rect(12, torsoTop + 6, 2, 3, STRAP);
+  }
+  if (look.belt) {
+    rect(side ? 6 : 5, torsoTop + 6, side ? 8 : 10, 1, STRAP);
+    if (!back) { px(side ? 8 : 9, torsoTop + 6, BUCKLE); px(side ? 8 : 10, torsoTop + 6, BUCKLE); }
+  }
+
+  // ------------------------------------------------------------- arms in front
+  let handL = { x: 3, y: shoulder + armLen }, handR = { x: 15, y: shoulder + armLen };
+  if (sitting) {
+    rect(3, shoulder, 2, 5, look.cloth); rect(15, shoulder, 2, 5, look.cloth);
+    hand(3, shoulder + 5); hand(15, shoulder + 5);
+  } else if (side) {
+    const raised = working && (mode === 'hammer' || mode === 'bellows') && phase === 0;
+    const forward = working && (mode === 'read' || mode === 'parcel' || mode === 'desk' || mode === 'gaze'
+      || ((mode === 'hammer' || mode === 'bellows') && phase === 1) || (mode === 'haggle' && phase === 0));
+    if (raised) {
+      rect(5, shoulder - 5, 2, 6, look.cloth); hand(5, shoulder - 7); handL = { x: 5, y: shoulder - 7 };
+    } else if (forward) {
+      rect(5, shoulder, 2, 3, look.cloth); rect(2, shoulder + 2, 4, 2, look.cloth); hand(1, shoulder + 2); handL = { x: 1, y: shoulder + 2 };
     } else {
-      px(8, headY - 0.5, 5, 0.5, skinDark);
+      rect(5, shoulder + stride, 2, armLen, look.cloth); hand(5, shoulder + stride + armLen); handL = { x: 5, y: shoulder + stride + armLen };
+    }
+  } else if (back) {
+    const up = working && (mode === 'hammer' || mode === 'bellows' || mode === 'haggle') && phase === 0;
+    if (up) {
+      rect(3, shoulder - 5, 2, armLen, look.cloth); rect(15, shoulder - 5, 2, armLen, look.cloth);
+      hand(3, shoulder - 7); hand(15, shoulder - 7);
+    } else {
+      rect(3, shoulder + stride, 2, armLen, look.cloth); rect(15, shoulder - stride, 2, armLen, look.cloth);
+      hand(3, shoulder + stride + armLen); hand(15, shoulder - stride + armLen);
+    }
+  } else {
+    const fwd = working && (mode === 'read' || mode === 'parcel' || mode === 'desk');
+    const wave = working && mode === 'haggle';
+    const up = working && (mode === 'hammer' || mode === 'bellows') && phase === 0;
+    if (fwd) {
+      rect(3, shoulder, 2, 4, look.cloth); rect(15, shoulder, 2, 4, look.cloth);
+      rect(4, shoulder + 3, 2, 2, look.cloth); rect(14, shoulder + 3, 2, 2, look.cloth);
+      handL = { x: 5, y: shoulder + 4 }; handR = { x: 13, y: shoulder + 4 };
+      hand(handL.x, handL.y); hand(handR.x, handR.y);
+    } else if (wave) {
+      rect(3, shoulder, 2, armLen, look.cloth); hand(3, shoulder + armLen);
+      const lift = phase === 0 ? 6 : 3;
+      rect(15, shoulder - lift, 2, lift + 1, look.cloth); hand(15, shoulder - lift - 2); handR = { x: 15, y: shoulder - lift - 2 };
+    } else if (up) {
+      rect(3, shoulder, 2, armLen, look.cloth); hand(3, shoulder + armLen);
+      rect(15, shoulder - 6, 2, 7, look.cloth); hand(15, shoulder - 8); handR = { x: 15, y: shoulder - 8 };
+    } else if (working && mode === 'gaze') {
+      rect(3, shoulder, 2, armLen, look.cloth); hand(3, shoulder + armLen);
+      rect(15, shoulder - 3, 2, 4, look.cloth); rect(13, shoulder - 4, 3, 2, look.cloth); hand(11, shoulder - 5); handR = { x: 11, y: shoulder - 5 };
+    } else {
+      rect(3, shoulder - stride, 2, armLen, look.cloth); rect(15, shoulder + stride, 2, armLen, look.cloth);
+      hand(3, shoulder - stride + armLen); hand(15, shoulder + stride + armLen);
     }
   }
-  if (look.hat !== 'none') {
-    const hatColour = look.hat === 'hood' ? look.cloth2 : leather;
-    if (look.hat === 'brim') { px(7, headY + 0.5, 7, 1, leather); px(8, headY - 1.5, 5, 2, hatColour); px(8, headY - 0.5, 5, 0.5, '#d9b34a'); }
-    else if (look.hat === 'cap') { px(7.5, headY - 0.5, 6, 2, hatColour); px(side ? 6.5 : 7, headY + 1, side ? 1.5 : 7, 0.5, hatColour); }
-    else if (look.hat === 'hood') { px(7.5, headY - 0.5, 6, 2.5, hatColour); px(7.5, headY + 2, 1, 4, hatColour); px(12.5, headY + 2, 1, 4, hatColour); }
-    else if (look.hat === 'band') { px(8, headY + 1.5, 5, 0.5, '#d9b34a'); }
-    else if (look.hat === 'goggles') { px(8, headY + 0.5, 5, 1, ink); px(9, headY + 0.5, 1, 1, '#7fb2dd'); if (!side) px(11, headY + 0.5, 1, 1, '#7fb2dd'); }
+
+  // ------------------------------------------------------------- head
+  const headTop = 2 + oy;
+  const faceX = side ? 6 : 5, faceW = side ? 8 : 10;
+  if (back) {
+    rect(5, headTop, 10, 10, look.hairStyle === 'bald' ? look.skin : look.hair);
+    rect(5, headTop + 8, 10, 2, look.hairStyle === 'bald' ? skinDark : hairDark);
+    if (look.hairStyle === 'long') { rect(5, headTop + 10, 10, 3, look.hair); rect(5, headTop + 12, 10, 1, hairDark); }
+    if (look.hairStyle === 'bun') rect(8, headTop - 2, 4, 2, look.hair);
+  } else {
+    rect(faceX, headTop + 1, faceW, 9, look.skin);
+    rect(faceX + faceW - 1, headTop + 2, 1, 7, skinDark);
+    rect(faceX, headTop + 9, faceW, 1, skinDark);
+    if (side) rect(faceX + 1, headTop + 5, 1, 2, INK);
+    else { rect(faceX + 2, headTop + 5, 1, 2, INK); rect(faceX + faceW - 3, headTop + 5, 1, 2, INK); }
+    if (look.beard) { rect(faceX + 1, headTop + 8, faceW - 2, 2, look.hair); rect(faceX + 1, headTop + 9, faceW - 2, 1, hairDark); }
+    if (look.hairStyle !== 'bald') {
+      rect(faceX, headTop, faceW, 2, look.hair);
+      rect(faceX, headTop, faceW, 1, hairDark);
+      const drape = look.hairStyle === 'long' ? 10 : 4;
+      if (side) { rect(faceX + faceW - 1, headTop + 1, 2, drape + 1, look.hair); px(faceX + faceW, headTop + 1, hairDark); }
+      else { rect(faceX - 1, headTop + 1, 1, drape, look.hair); rect(faceX + faceW, headTop + 1, 1, drape, look.hair); }
+      if (look.hairStyle === 'bun') rect(side ? faceX + faceW : faceX + 2, headTop - 2, 3, 2, look.hair);
+      if (look.hairStyle === 'mohawk') rect(faceX + 3, headTop - 2, 2, 3, look.hair);
+    } else {
+      rect(faceX, headTop, faceW, 1, skinDark);
+    }
   }
-  if (!working) return;
-  const hx = handX, hy = handY;
-  if (style === 'hammer' || style === 'bellows') {
-    line([[hx, hy], [hx - (raised ? 1 : 4), hy - (raised ? 5 : 1)]], '#94734b', 1);
-    shape([[hx - (raised ? 3 : 6), hy - (raised ? 6 : 3)], [hx + (raised ? 1 : -3), hy - (raised ? 6 : 3)], [hx + (raised ? 1 : -3), hy - (raised ? 4 : 0)], [hx - (raised ? 3 : 6), hy - (raised ? 4 : 0)]], '#8b9090');
-  } else if (style === 'read') {
-    shape([[hx - 3, hy - 2], [hx, hy - 1], [hx + 3, hy - 2 - phase * 0.4], [hx + 3, hy + 1], [hx, hy + 2], [hx - 3, hy + 1]], '#d8caa2');
-    line([[hx, hy - 1], [hx, hy + 1.5]], '#887f69');
-    line([[hx - 2.3, hy - 0.2], [hx - 0.8, hy + 0.2]], '#887f69', 0.4);
-  } else if (style === 'parcel') {
-    shape([[hx - 3, hy - 3], [hx + 2, hy - 3], [hx + 2, hy + 1], [hx - 3, hy + 1]], '#9f7950');
-    line([[hx - 0.5, hy - 3], [hx - 0.5, hy + 1]], '#d5be89');
-  } else if (style === 'desk') {
-    line([[hx, hy + 0.7], [hx + 1 + phase * 0.4, hy - 4]], '#d9cda9', 0.8);
-  } else if (style === 'gaze') {
-    line([[side ? 7 : 8, head + 3], [side ? 2 : 12, head + 2 - phase * 0.5]], '#b99a58', 1.8);
+  const brimY = headTop + 1;
+  switch (look.hat) {
+    case 'brim':
+      rect(side ? 1 : 2, brimY, side ? 17 : 16, 2, HAT);
+      rect(side ? 1 : 2, brimY + 1, side ? 17 : 16, 1, HAT_DARK);
+      rect(5, headTop - 2, 10, 3, HAT);
+      rect(5, headTop - 2, 10, 1, shade(HAT, 1.15));
+      rect(5, headTop, 10, 1, HAT_DARK);
+      break;
+    case 'cap':
+      rect(faceX - 1, headTop - 1, faceW + 2, 3, look.cloth2);
+      if (side) rect(faceX - 3, headTop + 1, 3, 1, look.cloth2); else rect(faceX - 1, headTop + 2, faceW + 2, 1, look.cloth2);
+      break;
+    case 'hood':
+      rect(faceX - 1, headTop - 1, faceW + 2, 3, look.cloth2);
+      rect(faceX - 1, headTop + 2, 1, 7, look.cloth2); rect(faceX + faceW, headTop + 2, 1, 7, look.cloth2);
+      break;
+    case 'band':
+      rect(faceX, headTop + 2, faceW, 1, BUCKLE);
+      break;
+    case 'goggles':
+      rect(faceX, headTop + 1, faceW, 2, INK);
+      px(faceX + 1, headTop + 1, '#7fb2dd'); if (!side) px(faceX + 5, headTop + 1, '#7fb2dd');
+      break;
+    default:
+      break;
   }
+
+  // ------------------------------------------------------------- what the hands hold
+  if (working) {
+    if (side) {
+      if (mode === 'hammer' || mode === 'bellows') {
+        if (phase === 0) { rect(handL.x, handL.y - 5, 1, 5, STRAP); rect(handL.x - 2, handL.y - 7, 5, 3, '#8b9090'); rect(handL.x - 2, handL.y - 7, 5, 1, '#b5b8b8'); }
+        else { rect(handL.x - 5, handL.y + 1, 6, 1, STRAP); rect(handL.x - 8, handL.y, 3, 3, '#8b9090'); }
+      } else if (mode === 'read') { rect(handL.x - 3, handL.y - 2, 7, 5, '#d8caa2'); rect(handL.x, handL.y - 2, 1, 5, '#a89a74'); if (phase === 1) px(handL.x + 2, handL.y - 3, '#f1ead8'); }
+      else if (mode === 'parcel') { rect(handL.x - 3, handL.y - 4, 7, 6, '#9f7950'); rect(handL.x - 3, handL.y - 4, 7, 1, '#c0955f'); rect(handL.x, handL.y - 4, 1, 6, '#d5be89'); }
+      else if (mode === 'desk') { rect(handL.x + 1, handL.y - 5 + phase, 1, 5, '#e0d3a0'); px(handL.x + 1, handL.y - 6 + phase, '#c9b58f'); }
+      else if (mode === 'gaze') { rect(handL.x - 6, headTop + 5 - phase, 8, 2, '#b99a58'); rect(handL.x - 7, headTop + 4 - phase, 2, 4, '#8a7a3a'); }
+      else if (mode === 'haggle' && phase === 0) { px(handL.x - 2, handL.y - 2, BUCKLE); px(handL.x - 3, handL.y - 4, BUCKLE); }
+    } else if (!back) {
+      if (mode === 'read') { rect(6, handL.y - 1, 8, 5, '#d8caa2'); rect(10, handL.y - 1, 1, 5, '#a89a74'); rect(7, handL.y, 2, 1, '#a89a74'); if (phase === 1) px(11, handL.y - 2, '#f1ead8'); }
+      else if (mode === 'parcel') { rect(5, handL.y - 5, 10, 7, '#9f7950'); rect(5, handL.y - 5, 10, 1, '#c0955f'); rect(9, handL.y - 5, 2, 7, '#d5be89'); rect(5, handL.y - 2, 10, 1, '#d5be89'); hand(4, handL.y - 1); hand(14, handL.y - 1); }
+      else if (mode === 'desk') { rect(handR.x, handR.y - 4 + phase, 1, 4, '#e0d3a0'); }
+      else if (mode === 'haggle' && phase === 0) { px(handR.x + 3, handR.y - 2, BUCKLE); px(handR.x + 4, handR.y - 4, BUCKLE); px(handR.x + 2, handR.y - 5, BUCKLE); }
+      else if (mode === 'hammer' || mode === 'bellows') {
+        if (phase === 0) { rect(handR.x, handR.y - 5, 1, 5, STRAP); rect(handR.x - 2, handR.y - 7, 5, 3, '#8b9090'); rect(handR.x - 2, handR.y - 7, 5, 1, '#b5b8b8'); }
+        else { rect(16, shoulder + 2, 1, 5, STRAP); rect(15, shoulder + 7, 4, 3, '#8b9090'); }
+      } else if (mode === 'gaze') { rect(handR.x - 6, handR.y - 1, 8, 2, '#b99a58'); }
+    }
+  }
+
+  outline(p, INK);
+  return p;
 }
 
 /** Small emote bubble sprites keyed by name. */
