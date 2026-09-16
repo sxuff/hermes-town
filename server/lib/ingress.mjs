@@ -8,6 +8,7 @@
 
 import {
   AGENT_KEY,
+  DETAIL_NAME,
   INGRESS_EVENT_KEYS,
   INGRESS_ID,
   INGRESS_VERSION,
@@ -70,7 +71,7 @@ export function validateIngressEvent(raw) {
   for (const key of Object.keys(raw)) {
     if (!KEY_SET.has(key)) return { ok: false, reason: `event carries an unknown field: ${safeKey(key)}` };
   }
-  const { id, key, kind, role, tool, outcome } = raw;
+  const { id, key, kind, role, tool, outcome, detail } = raw;
   if (typeof id !== 'string' || !INGRESS_ID.test(id)) {
     return { ok: false, reason: 'event id is missing or malformed' };
   }
@@ -89,6 +90,12 @@ export function validateIngressEvent(raw) {
     }
   } else if (tool !== undefined) {
     return { ok: false, reason: 'tool is only valid on a tool_started event' };
+  }
+  if (detail !== undefined) {
+    if (kind !== 'tool_started') return { ok: false, reason: 'detail is only valid on a tool_started event' };
+    if (typeof detail !== 'string' || !DETAIL_NAME.test(detail) || detail.includes('..')) {
+      return { ok: false, reason: 'detail is not a publishable name' };
+    }
   }
   if (outcome !== undefined) {
     if (typeof outcome !== 'string' || !OUTCOME_SET.has(outcome)) {

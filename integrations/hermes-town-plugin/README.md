@@ -43,6 +43,7 @@ All other callback fields are ignored. The queue is bounded to 512 events, deliv
 | Variable | Default |
 |---|---|
 | `HERMES_TOWN_BRIDGE_URL` | `http://127.0.0.1:4187/api/town/ingest` |
+| `HERMES_TOWN_SKILL_NAMES` | unset. Set to `1` to publish the skill name a `skill_view` or `skill_manage` call asks for, so the town gives each skill its own market stall. Nothing else from tool arguments is ever read. |
 | `HERMES_TOWN_BRIDGE_TOKEN_FILE` | `${HERMES_HOME:-~/.hermes}/hermes-town/runtime/bridge-token` |
 
 Only loopback HTTP or HTTPS endpoints are accepted. The token must be a regular file with at least 128 estimated bits of entropy. On POSIX systems it must have no group or other permission bits.

@@ -15,8 +15,10 @@ const TOOLS_BY_ROLE: Record<RoleClass, string[]> = {
   review: ['read_file', 'search_files', 'terminal', 'read_file', 'kanban_comment'],
   tooling: ['terminal', 'process_manage', 'terminal', 'discord', 'browser_navigate', 'browser_snapshot'],
   general: ['read_file', 'write_file', 'terminal', 'search_files'],
+  scheduled: ['read_file', 'discord'],
 };
 const NAMES = ['auth refactor', 'docs site', 'scraper', 'flaky tests', 'landing page', 'db migration', 'perf pass', 'onboarding'];
+const SKILLS = ['writing-plans', 'code-review', 'deploy-checklist', 'superpowers:brainstorm'];
 
 export function createDemoSource(sink: EventSink): Source {
   let status: SourceStatus = 'idle';
@@ -49,9 +51,9 @@ export function createDemoSource(sink: EventSink): Source {
     const calls = Math.floor(rnd(2, 7));
     let t = rnd(0.8, 2);
     for (let i = 0; i < calls; i++) {
-      const tool = pick(TOOLS_BY_ROLE[s.role]);
+      const tool = Math.random() < 0.18 ? 'skill_view' : pick(TOOLS_BY_ROLE[s.role]);
       later(t, () => {
-        emit(s.id, 'agent.tool_started', { tool });
+        emit(s.id, 'agent.tool_started', tool === 'skill_view' ? { tool, detail: pick(SKILLS) } : { tool });
         if (tool === 'delegate_task' && s.turnsLeft > 1) spawn(pick(['research', 'fabrication', 'review', 'tooling'] as const), true, s.id.slice(-4));
         const failed = Math.random() < 0.08;
         later(rnd(0.3, 3), () => emit(s.id, failed ? 'agent.failed' : 'agent.waiting', failed ? { reason: 'tool error' } : { action: 'tool done' }));
@@ -79,6 +81,22 @@ export function createDemoSource(sink: EventSink): Source {
     later(rnd(1, 3), () => turn(s));
   };
 
+  /** One scheduled job: a keeper that runs every couple of minutes. */
+  let keeperTimer: number | null = null;
+  const keeper = (): void => {
+    const id = 'h/cron/0000000000000042';
+    if (!seqs.has(id)) emit(id, 'agent.spawned', { role: 'scheduled', displayName: 'Keeper 0042' });
+    const run = (): void => {
+      emit(id, 'agent.assigned', { action: 'scheduled run' });
+      later(2, () => emit(id, 'agent.tool_started', { tool: 'read_file' }));
+      later(4, () => emit(id, 'agent.tool_started', { tool: 'discord' }));
+      later(9, () => emit(id, 'agent.completed', { action: 'scheduled run' }));
+      later(12, () => emit(id, 'agent.departed'));
+    };
+    later(5, run);
+    keeperTimer = window.setInterval(run, 90000);
+  };
+
   const tick = (): void => {
     const mains = sessions.filter((s) => !s.child).length;
     if (mains < 2 || (mains < 3 && Math.random() < 0.15)) spawn(mains === 0 ? 'coordinator' : pick(['coordinator', 'general', 'fabrication'] as const), false);
@@ -89,12 +107,14 @@ export function createDemoSource(sink: EventSink): Source {
     start() {
       status = 'connected';
       tick();
+      keeper();
       timer = window.setInterval(tick, 12000);
     },
     stop() {
       status = 'idle';
       if (timer !== null) window.clearInterval(timer);
-      timer = null;
+      if (keeperTimer !== null) window.clearInterval(keeperTimer);
+      timer = null; keeperTimer = null;
       for (const id of timers) window.clearTimeout(id);
       timers.clear();
     },

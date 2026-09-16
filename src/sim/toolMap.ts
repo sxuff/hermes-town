@@ -26,17 +26,20 @@ const POST: ToolTarget = { place: 'post', style: 'parcel', verb: 'sending' };
 const OBSERVATORY: ToolTarget = { place: 'observatory', style: 'gaze', verb: 'looking' };
 const HALL: ToolTarget = { place: 'hall', style: 'desk', verb: 'planning' };
 const MARKET: ToolTarget = { place: 'market', style: 'haggle', verb: 'using' };
+/** Skills are the market: every skill is a stall, a skill call is a visit to it. */
+const SKILLS: ToolTarget = { place: 'market', style: 'haggle', verb: 'consulting' };
 
 /** Exact Hermes tool names, grouped by where the work happens. */
 const EXACT: Record<string, ToolTarget> = Object.fromEntries<ToolTarget>([
   // reading and looking things up: the library
-  ...['read_file', 'search_files', 'skill_view', 'skills_list', 'session_search', 'memory', 'read_terminal', 'read_window_below',
+  ...['skill_view', 'skills_list', 'skill_manage'].map((t): [string, ToolTarget] => [t, SKILLS]),
+  ...['read_file', 'search_files', 'session_search', 'memory', 'read_terminal', 'read_window_below',
     'feishu_doc_read', 'feishu_drive_list_comments', 'feishu_drive_list_comment_replies',
     'kanban_list', 'kanban_show', 'kanban_attachments', 'ha_get_state', 'ha_list_entities', 'ha_list_services',
     'yb_query_group_info', 'yb_query_group_members', 'yb_search_sticker'].map((t): [string, ToolTarget] => [t, LIBRARY]),
   // making and changing things: the workshop
   ...['write_file', 'patch', 'apply_layout', 'image_generate', 'video_generate', 'xai_video_edit', 'xai_video_extend', 'text_to_speech',
-    'skill_manage', 'setup_mcp', 'kanban_create', 'kanban_attach', 'kanban_attach_url', 'kanban_link', 'kanban_comment'].map((t): [string, ToolTarget] => [t, WORKSHOP]),
+    'setup_mcp', 'kanban_create', 'kanban_attach', 'kanban_attach_url', 'kanban_link', 'kanban_comment'].map((t): [string, ToolTarget] => [t, WORKSHOP]),
   // executing: the forge
   ...['terminal', 'execute_code', 'process_manage', 'close_terminal', 'computer_use', 'ha_call_service'].map((t): [string, ToolTarget] => [t, FORGE]),
   // sending and shipping: the post office

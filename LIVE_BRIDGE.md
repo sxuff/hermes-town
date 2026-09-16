@@ -135,6 +135,26 @@ own and sits on its porch for half an hour before it is forgotten. A new event
 for that session wakes it up. Nothing here claims Hermes ended the session; it
 is only what the town shows when the stream goes quiet.
 
+## Scheduled runs and skill names
+
+A Hermes cron run names its session `cron_<job id>_<timestamp>`. The plugin
+keys such a run on the job id alone, in its own `h/cron/…` namespace, so every
+run of one job is the same resident: a keeper with the `scheduled` role. The
+town gives each keeper a post beside a lamp in the square. Between runs it
+stands there on watch; when the job fires it thinks at the hall, sends its
+runners out, pins the result and walks back to its post. A finished run is not
+a departure, and a keeper is only dropped from a fresh snapshot after a day of
+silence. The job id and timestamp are HMAC input only and never leave the
+process; the keeper's name is `Keeper` plus four pseudonym characters.
+
+Skill names are an opt-in. With `HERMES_TOWN_SKILL_NAMES=1` in the Hermes
+process environment, a `skill_view` or `skill_manage` call publishes the
+skill it names as the event's `detail` (`^[A-Za-z0-9_.:-]{1,64}$`, no `..`).
+No other tool's arguments are ever read, with the flag on or off. The town
+gives each skill its own market stall, labelled with the skill's name, and a
+skill call sends a runner to that stall. Without the flag, skill calls are
+plain market visits.
+
 ## Operator runbook
 
 ### 1. Install the source package

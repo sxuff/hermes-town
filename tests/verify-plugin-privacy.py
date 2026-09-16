@@ -22,8 +22,9 @@ EXPECTED_HOOKS = {
     "on_session_start", "on_session_end", "on_session_finalize",
     "on_session_reset", "subagent_start", "subagent_stop",
 }
-EVENT_KEYS = {"id", "key", "kind", "role", "tool", "outcome"}
-KEY_RE = re.compile(r"^h/(main|child)/[0-9a-f]{16}$")
+EVENT_KEYS = {"id", "key", "kind", "role", "tool", "outcome", "detail"}
+KEY_RE = re.compile(r"^h/(main|child|cron)/[0-9a-f]{16}$")
+DETAIL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 class Context:
@@ -141,6 +142,35 @@ def main() -> int:
         fire(ctx, fired_hooks, "on_session_reset", session_id=main_id, reason=f"{SENTINEL}-reset")
         assert fired_hooks == EXPECTED_HOOKS
 
+        # A cron run: two runs of one job map to one stable resident, and the
+        # raw job id and timestamp never leave the process.
+        cron_a = f"cron_{SENTINEL}-job_20260916_120000"
+        cron_b = f"cron_{SENTINEL}-job_20260916_130000"
+        fire(ctx, fired_hooks, "on_session_start", session_id=cron_a, platform="cron")
+        fire(ctx, fired_hooks, "pre_llm_call", session_id=cron_a, parent_session_id="", **private)
+        fire(ctx, fired_hooks, "on_session_end", session_id=cron_a, completed=True, failed=False, interrupted=False)
+        fire(ctx, fired_hooks, "on_session_start", session_id=cron_b, platform="cron")
+
+        # Skill names are off by default: the argument is not read at all.
+        fire(
+            ctx, fired_hooks, "pre_tool_call", tool_name="skill_view", session_id=main_id,
+            args={"name": "writing-plans", "file_path": f"/{SENTINEL}/ref.md"},
+        )
+        os.environ["HERMES_TOWN_SKILL_NAMES"] = "1"
+        fire(
+            ctx, fired_hooks, "pre_tool_call", tool_name="skill_view", session_id=main_id,
+            args={"name": "writing-plans", "file_path": f"/{SENTINEL}/ref.md"},
+        )
+        fire(
+            ctx, fired_hooks, "pre_tool_call", tool_name="skill_view", session_id=main_id,
+            args={"name": f"../{SENTINEL}"},
+        )
+        fire(
+            ctx, fired_hooks, "pre_tool_call", tool_name="read_file", session_id=main_id,
+            args={"name": f"{SENTINEL}-not-a-skill", "path": f"/{SENTINEL}"},
+        )
+        os.environ.pop("HERMES_TOWN_SKILL_NAMES", None)
+
         events = []
         while not bridge._queue.empty():
             events.append(bridge._queue.get_nowait())
@@ -151,6 +181,12 @@ def main() -> int:
         for event in events:
             assert set(event) <= EVENT_KEYS
             assert KEY_RE.fullmatch(event["key"])
+        cron_keys = {event["key"] for event in events if event["key"].startswith("h/cron/")}
+        assert len(cron_keys) == 1, "two runs of one job must share one resident"
+        assert all(event["role"] == "scheduled" for event in events if event["key"] in cron_keys)
+        details = [event["detail"] for event in events if "detail" in event]
+        assert details == ["writing-plans"], details
+        assert all(DETAIL_RE.fullmatch(d) for d in details)
 
         assert plugin._endpoint_is_allowed("http://127.0.0.1:4187/api/town/ingest")
         assert plugin._endpoint_is_allowed("https://localhost:4187/api/town/ingest")
