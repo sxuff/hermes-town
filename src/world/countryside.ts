@@ -239,7 +239,6 @@ export function buildCountryside(local: TownMap): TownMap {
   // A handcart at the end of the west trail.
   at(cartSpot.x, cartSpot.y, 'cart', -6, -4);
   // a run of dry-stone wall beside the east road
-  for (let x = 92; x <= 104; x++) if (!road.has(key(x, 36)) && !water.has(key(x, 36))) ground[36]![x] = T.stoneWall;
   // a lone signpost at the north-east fork
   at(96, 9, 'signpost', 1, -6);
 

@@ -111,11 +111,12 @@ export function buildTownLocal(): TownMap {
   // ---- stream and pond
   const putWater = (x: number, y: number) => water.add(key(x, y));
   stroke([{ x: 60, y: 0 }, { x: 60, y: 8 }, { x: 58, y: 15 }, { x: 60, y: 22 }, { x: 59, y: 30 }, { x: 61, y: 41 }], 4, putWater);
-  for (const y of [14, 19, 39]) stroke([{ x: 55, y }, { x: 63, y }], 2, putRoad);
+  // Two crossings: the east street and the home street, each one flat span.
+  for (const y of [22, 40]) stroke([{ x: 55, y }, { x: 63, y }], 2, putRoad);
   for (let y = 3; y <= 7; y++) for (let x = 54; x <= 61; x++) if (Math.hypot(x - 57.5, (y - 5) * 1.6) < 4) putWater(x, y);
   // Crossings are three separate, horizontal spans. Keep the old east street
   // from merging into the middle bridge as a six-tile-long plank patch.
-  const bridgeRows = new Set([13, 14, 18, 19, 38, 39]);
+  const bridgeRows = new Set([21, 22, 39, 40]);
   for (const k of water) if (!bridgeRows.has(Math.floor(k / LOCAL_W))) road.delete(k);
 
   // ---- write ground
@@ -177,7 +178,6 @@ export function buildTownLocal(): TownMap {
   }
   // a cobbled approach climbs from the square to the hall, walled either side of the stairs
   for (let y = 11; y <= 15; y++) for (let x = 30; x <= 32; x++) if (ground[y]![x] !== T.stairs) ground[y]![x] = (x + y) % 2 ? T.cobble : T.cobble2;
-  for (const x of [27, 28, 29, 33, 34, 35]) ground[15]![x] = T.stoneWall;
   // crop field on the plateau between the library and the hall
   for (let y = 7; y <= 10; y++) for (let x = 18; x <= 23; x++) ground[y]![x] = (x + y) % 2 ? T.crop : T.crop2;
   for (let x = 17; x <= 24; x++) { ground[6]![x] = T.fence; ground[11]![x] = T.fence; }
@@ -334,7 +334,7 @@ export function buildTownLocal(): TownMap {
   props.push({ kind: 'signpost', x: 33 * TILE + 1, y: 15 * TILE - 6, blocks: [{ x: 33, y: 15 }] });
   // clutter near buildings
   const clutter: [PropKind, number, number][] = [
-    ['crate', 57 * TILE + 2, 12 * TILE + 2], ['crate', 58 * TILE + 2, 12 * TILE + 6], ['log', 44 * TILE, 12 * TILE + 4], ['log', 44 * TILE + 4, 10 * TILE + 6],
+    ['crate', 45 * TILE + 2, 14 * TILE + 2], ['log', 44 * TILE, 12 * TILE + 4], ['log', 44 * TILE + 4, 10 * TILE + 6],
     ['hay', 45 * TILE, 30 * TILE + 4], ['barrel', 56 * TILE + 3, 30 * TILE - 2], ['barrel', 56 * TILE + 3, 28 * TILE + 6], ['log', 44 * TILE, 27 * TILE + 4],
     ['barrel', 37 * TILE + 3, 30 * TILE - 2], ['barrel', 46 * TILE + 3, 29 * TILE + 4], ['crate', 13 * TILE + 2, 29 * TILE + 2], ['crate', 3 * TILE + 2, 29 * TILE + 2],
     ['bush', 3 * TILE, 12 * TILE + 2], ['bush', 16 * TILE, 12 * TILE + 2], ['bush', 25 * TILE - 4, 11 * TILE + 2], ['bush', 37 * TILE + 2, 11 * TILE + 2],
