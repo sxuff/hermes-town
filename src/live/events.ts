@@ -29,9 +29,11 @@ export interface TownEvent {
   /** Optional, only present when the operator enabled richer metadata. */
   title?: string;
   file?: string;
+  /** The skill a skill_view names, when the plugin's opt-in is on. */
+  detail?: string;
 }
 
-const ROLES: readonly string[] = ['coordinator', 'research', 'fabrication', 'review', 'tooling', 'general'];
+const ROLES: readonly string[] = ['coordinator', 'research', 'fabrication', 'review', 'tooling', 'general', 'scheduled'];
 const TYPES: readonly string[] = ['agent.spawned', 'agent.assigned', 'agent.tool_started', 'agent.waiting', 'agent.completed', 'agent.failed', 'agent.departed'];
 
 function str(v: unknown, max: number): string | undefined {
@@ -64,6 +66,7 @@ export function parseTownEvent(raw: unknown): TownEvent | null {
     reason: str(r.reason, 64),
     title: str(r.title, 80),
     file: str(r.file, 80),
+    detail: str(r.detail, 64),
   };
 }
 

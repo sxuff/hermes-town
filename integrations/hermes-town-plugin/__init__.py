@@ -124,6 +124,8 @@ ROLE_FABRICATION = "fabrication"
 ROLE_REVIEW = "review"
 ROLE_TOOLING = "tooling"
 ROLE_GENERAL = "general"
+#: A scheduled (cron) run. One stable resident per job, across every run.
+ROLE_SCHEDULED = "scheduled"
 
 _ROLES = frozenset(
     {
@@ -133,8 +135,38 @@ _ROLES = frozenset(
         ROLE_REVIEW,
         ROLE_TOOLING,
         ROLE_GENERAL,
+        ROLE_SCHEDULED,
     }
 )
+
+#: Hermes names a cron run's session ``cron_<job id>_<YYYYmmdd_HHMMSS>``. The
+#: job id is what stays the same from one run to the next, so it is the HMAC
+#: input for the resident key; the timestamp is discarded.
+_CRON_SESSION = re.compile(r"^cron_(.+)_\d{8}_\d{6}$")
+
+#: Opt-in: publish the skill a ``skill_view`` / ``skill_manage`` call names,
+#: so the town can give each skill its own market stall. Off by default; a
+#: skill name is the operator's own catalog, but it is still one word more
+#: than the bridge otherwise says.
+_DETAIL_ENV = "HERMES_TOWN_SKILL_NAMES"
+_DETAIL_TOOLS = frozenset({"skill_view", "skill_manage"})
+_DETAIL_NAME = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+def _detail_enabled() -> bool:
+    return os.environ.get(_DETAIL_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_detail(args: Any) -> Optional[str]:
+    if not isinstance(args, dict):
+        return None
+    name = args.get("name")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not _DETAIL_NAME.fullmatch(name) or ".." in name:
+        return None
+    return name
 
 #: Closed mapping from an arbitrary Hermes child-role tag to one enum value.
 #: A tag outside this table resolves to ``general``. The raw tag is used only
@@ -415,6 +447,7 @@ class _Bridge:
         role: str,
         tool: Optional[str] = None,
         outcome: Optional[str] = None,
+        detail: Optional[str] = None,
     ) -> None:
         """Enqueue exactly one bounded event. Never raises, never blocks."""
         if not self.enabled:
@@ -427,6 +460,8 @@ class _Bridge:
         }
         if kind == KIND_TOOL_STARTED:
             event["tool"] = tool if tool else _GENERIC_TOOL
+            if detail is not None:
+                event["detail"] = detail
         if outcome is not None:
             event["outcome"] = outcome
         try:
@@ -581,7 +616,7 @@ def _identifier(value: Any) -> Optional[str]:
 
 #: The role a context is given when it has to be created from a generic hook,
 #: before any hook that carries a role has been seen.
-_DEFAULT_ROLE = {"main": ROLE_COORDINATOR, "child": ROLE_GENERAL}
+_DEFAULT_ROLE = {"main": ROLE_COORDINATOR, "child": ROLE_GENERAL, "cron": ROLE_SCHEDULED}
 
 
 def _resolve_session(
@@ -602,6 +637,11 @@ def _resolve_session(
     raw = _identifier(session_id)
     if raw is None:
         return None
+    scheduled = _CRON_SESSION.fullmatch(raw)
+    if scheduled is not None:
+        # A cron run: the resident belongs to the job, not to this run.
+        cron_key = bridge.key_for("cron", scheduled.group(1))
+        return "cron", cron_key, bridge.lookup(cron_key)
     child_key = bridge.key_for("child", raw)
     child_entry = bridge.lookup(child_key)
     if child_entry is not None:
@@ -681,8 +721,9 @@ def _on_pre_llm_call(
         entry = _ensure_resident(bridge, key, "child", (entry or {}).get("role") or ROLE_GENERAL)
         bridge.publish(key, KIND_ASSIGNED, entry["role"])
         return None
-    _ensure_resident(bridge, key, "main", ROLE_COORDINATOR)
-    bridge.publish(key, KIND_ASSIGNED, ROLE_COORDINATOR)
+    role = _DEFAULT_ROLE[klass]
+    _ensure_resident(bridge, key, klass, role)
+    bridge.publish(key, KIND_ASSIGNED, role)
     return None
 
 
@@ -719,9 +760,13 @@ def _on_pre_tool_call(
     tool_name: Any = None,
     session_id: Any = None,
     parent_session_id: Any = None,
+    args: Any = None,
     **_ignored: Any,
 ) -> None:
-    """A tool starts. ``args`` arrives in ``_ignored`` and is never read.
+    """A tool starts. ``args`` is read for exactly one field, the skill name
+    of a ``skill_view`` or ``skill_manage`` call, and only when the operator
+    has opted in with ``HERMES_TOWN_SKILL_NAMES=1``. Every other tool's
+    arguments are never read.
 
     A child's tool call carries the child's session id, so it is routed to the
     child's resident and the child's district — never to a ``main`` resident
@@ -747,7 +792,9 @@ def _on_pre_tool_call(
             # tool call is not a reason to disbelieve it.
             return None
         entry = _ensure_resident(bridge, key, klass, entry["role"])
-    bridge.publish(key, KIND_TOOL_STARTED, entry["role"], tool=_safe_tool(tool_name))
+    tool = _safe_tool(tool_name)
+    detail = _safe_detail(args) if tool in _DETAIL_TOOLS and _detail_enabled() else None
+    bridge.publish(key, KIND_TOOL_STARTED, entry["role"], tool=tool, detail=detail)
     return None
 
 
@@ -796,7 +843,7 @@ def _on_session_start(session_id: Any = None, **_ignored: Any) -> None:
         # The child's spawn, role and district are ``subagent_start``'s to
         # publish; this hook carries no role and must not mint a coordinator.
         return
-    _ensure_resident(bridge, key, "main", ROLE_COORDINATOR)
+    _ensure_resident(bridge, key, klass, _DEFAULT_ROLE[klass])
 
 
 def _retire(bridge: _Bridge, key: str, entry: Dict[str, Any], terminal: Optional[Tuple[str, str]]) -> None:

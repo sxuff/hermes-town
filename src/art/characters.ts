@@ -31,7 +31,7 @@ export function workFrame(style: WorkStyle, facing: Facing, i: number): number {
 }
 export const FRAME_COUNT = 17 + WORK_STYLES.length * 3 * 2;
 
-export type RoleClass = 'coordinator' | 'research' | 'fabrication' | 'review' | 'tooling' | 'general';
+export type RoleClass = 'coordinator' | 'research' | 'fabrication' | 'review' | 'tooling' | 'general' | 'scheduled';
 
 export interface Look {
   hair: string;
@@ -69,6 +69,7 @@ export function lookFor(id: string, role: RoleClass): Look {
     case 'fabrication': look.apron = true; look.hat = r() < 0.4 ? 'goggles' : 'none'; look.cloth = pick(['#7a3a2a', '#a0703a', '#7a6a3a']); break;
     case 'review': look.hat = 'band'; look.cloth = pick(['#4a4a56', '#7a6a3a', '#2f6b66']); break;
     case 'tooling': look.apron = r() < 0.5; look.hat = r() < 0.5 ? 'cap' : 'none'; look.cloth = pick(['#4f6b3a', '#4a4a56', '#3f5e7a']); break;
+    case 'scheduled': look.hat = 'hood'; look.cloth = pick(['#2f3a5a', '#3a3350', '#2f4a4a']); look.beard = false; break;
     default: break;
   }
   look.cloth2 = shade(look.cloth, 0.72);

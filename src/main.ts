@@ -90,11 +90,11 @@ function renderPanel(): void {
   const r = selectedId ? sim.residents.get(selectedId) : null;
   if (!r) { panel.hidden = true; return; }
   panel.hidden = false;
-  const place = r.place ? PLACE_LABEL[r.place] : r.state === 'leaving' ? 'going home' : r.state === 'waiting' ? 'at the front door' : r.state === 'returning' ? 'coming back' : 'on the road';
+  const place = r.place ? PLACE_LABEL[r.place] : r.state === 'leaving' ? 'going home' : r.state === 'waiting' ? 'at the front door' : r.state === 'posted' ? 'at its post' : r.state === 'returning' ? 'coming back' : 'on the road';
   const parent = r.parentId ? sim.residents.get(r.parentId) : null;
   const runnersOut = r.kind === 'session' ? sim.runners().filter((x) => x.parentId === r.id).length : 0;
   const rows: [string, string][] = [
-    ['state', r.state === 'waiting' ? 'waiting for you' : r.state],
+    ['state', r.state === 'waiting' ? 'waiting for you' : r.state === 'posted' ? 'on watch until the next run' : r.state],
     ['where', place],
     ['doing', r.bubble ?? (r.anim === 'sit' ? 'resting' : r.anim)],
     ...(r.kind === 'runner' ? [['sent by', parent?.name ?? 'a session'] as [string, string]] : [['runners out', String(runnersOut)] as [string, string]]),
@@ -102,7 +102,7 @@ function renderPanel(): void {
     ['in town', ago(sim.now() - r.spawnedAt)],
     ['last event', `${ago(sim.now() - r.lastEventAt)} ago`],
   ];
-  const sub = r.kind === 'runner' ? `tool call · ${r.role}` : `${r.title ?? (r.memory ? 'earlier today' : r.isChild ? 'subagent' : 'session')} · ${r.role}`;
+  const sub = r.kind === 'runner' ? `tool call · ${r.role}` : r.role === 'scheduled' ? `scheduled job · keeper` : `${r.title ?? (r.memory ? 'earlier today' : r.isChild ? 'subagent' : 'session')} · ${r.role}`;
   panel.innerHTML = `
     <h3>${escapeHtml(r.name)}</h3>
     <div class="sub">${escapeHtml(sub)}</div>
@@ -121,6 +121,7 @@ function renderStatus(): void {
   const active = sim.active();
   const resting = [...sim.residents.values()].filter((r) => r.state === 'resting' && !r.memory).length;
   const remembered = sim.remembered().length;
+  const keepers = sim.keepers().length;
   const runners = sim.runners().length;
   const waiting = active.filter((r) => r.state === 'waiting').length;
   const working = active.length - waiting;
@@ -131,7 +132,7 @@ function renderStatus(): void {
   } else {
     text = `live Hermes events · ${st}`;
     if (st === 'connected') {
-      text += ` · ${mains} sessions · ${active.length - mains} helpers · ${working} working · ${runners} tool calls out · ${waiting} waiting for you` + (resting ? ` · ${resting} resting` : '') + (remembered ? ` · ${remembered} from earlier today` : '');
+      text += ` · ${mains} sessions · ${active.length - mains} helpers · ${working} working · ${runners} tool calls out · ${waiting} waiting for you` + (keepers ? ` · ${keepers} keepers on watch` : '') + (resting ? ` · ${resting} resting` : '') + (remembered ? ` · ${remembered} from earlier today` : '');
       const o = source.omitted?.();
       if (o && o.stale + o.departed > 0) text += ` · ${o.stale + o.departed} past sessions not shown`;
     }

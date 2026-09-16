@@ -37,7 +37,9 @@ const HISTORY_LIMIT = 14;
 
 export type ResidentState =
   | 'arriving' | 'moving' | 'working' | 'idle' | 'celebrating' | 'failed'
-  | 'pinning' | 'waiting' | 'returning' | 'handing' | 'leaving' | 'resting' | 'gone';
+  | 'pinning' | 'waiting' | 'returning' | 'handing' | 'leaving' | 'resting' | 'gone'
+  /** a keeper standing at its post between scheduled runs */
+  | 'posted';
 export type Anim = 'walk' | 'stand' | 'work' | 'sit';
 export type ResidentKind = 'session' | 'runner';
 
@@ -47,6 +49,8 @@ export interface Intent {
   home?: boolean;
   /** Walk to this tile instead of a station. */
   tile?: Point;
+  /** Prefer this station: a skill's own stall. */
+  stationId?: string;
 }
 
 export interface Resident {
@@ -61,6 +65,8 @@ export interface Resident {
   isChild: boolean;
   /** Remembered from earlier today: sits on the porch, was not seen live. */
   memory: boolean;
+  /** A scheduled job's keeper: has a post in town instead of a front door. */
+  post: Point | null;
   x: number;
   y: number;
   facing: Facing;
@@ -109,6 +115,12 @@ export class TownSim {
   private time = 0;
   private runnerSerial = 0;
   private boardTile: Point;
+  /** Where keepers stand: beside the lamps of the square, one each. */
+  private posts: Point[] = [];
+  private postsTaken = new Map<string, string>();
+  /** Skill name → market station id. Every skill gets its own stall. */
+  readonly stalls = new Map<string, string>();
+  private stallUse = new Map<string, number>();
   /** Building activity, 0..1, drives lit windows and chimney smoke. */
   readonly activity = new Map<Place, number>();
 
@@ -123,6 +135,34 @@ export class TownSim {
     const b = boards[0];
     const guess = b ? { x: Math.floor((b.x + 12) / TILE), y: Math.floor(b.y / TILE) + 2 } : { x: Math.floor(fx / TILE), y: Math.floor(fy / TILE) + 3 };
     this.boardTile = nearestWalkable(map.grid, guess) ?? map.entrance;
+    for (const lamp of map.lamps) {
+      const spot = nearestWalkable(map.grid, { x: lamp.x + 1, y: lamp.y + 1 }, 2);
+      if (spot) this.posts.push(spot);
+    }
+  }
+
+  /** The stall a skill works from, assigning the least recently used one on first sight. */
+  stallFor(skill: string): Station | null {
+    const known = this.stalls.get(skill);
+    const stallStations = this.map.stations.filter((s) => s.place === 'market' && s.prop.kind === 'stall');
+    if (known) { this.stallUse.set(skill, this.time); return stallStations.find((s) => s.id === known) ?? null; }
+    if (stallStations.length === 0) return null;
+    const taken = new Set(this.stalls.values());
+    let pick = stallStations.find((s) => !taken.has(s.id));
+    if (!pick) {
+      // every stall has a skill: the one used longest ago gives way
+      let oldest: string | null = null;
+      for (const [name, at] of this.stallUse) if (oldest === null || at < (this.stallUse.get(oldest) ?? 0)) oldest = name;
+      if (oldest !== null) { const id = this.stalls.get(oldest)!; this.stalls.delete(oldest); this.stallUse.delete(oldest); pick = stallStations.find((s) => s.id === id); }
+    }
+    if (!pick) return null;
+    this.stalls.set(skill, pick.id);
+    this.stallUse.set(skill, this.time);
+    return pick;
+  }
+
+  keepers(): Resident[] {
+    return [...this.residents.values()].filter((r) => r.role === 'scheduled' && r.kind === 'session');
   }
 
   now(): number { return this.time; }
@@ -138,7 +178,7 @@ export class TownSim {
 
   /** Sessions and subagents that still represent a live execution context. */
   active(): Resident[] {
-    return [...this.residents.values()].filter((r) => r.kind === 'session' && !r.memory && r.state !== 'resting' && r.state !== 'gone');
+    return [...this.residents.values()].filter((r) => r.kind === 'session' && !r.memory && r.state !== 'resting' && r.state !== 'gone' && r.state !== 'posted');
   }
 
   runners(): Resident[] {
@@ -211,7 +251,7 @@ export class TownSim {
     if (e.seq <= r.seq) return;
     r.seq = e.seq;
     if (r.memory) { r.memory = false; r.history = []; }
-    if ((r.state === 'resting' || r.state === 'waiting') && e.type !== 'agent.departed') this.wake(r);
+    if ((r.state === 'resting' || r.state === 'waiting' || r.state === 'posted') && e.type !== 'agent.departed') this.wake(r);
     r.lastEventAt = this.time;
     r.quiet = 0;
     if (e.title && !r.title) r.title = e.title;
@@ -230,8 +270,8 @@ export class TownSim {
         break;
       case 'agent.tool_started': {
         const tool = e.tool ?? 'tool';
-        this.dispatch(r, tool);
-        this.note(r, tool);
+        this.dispatch(r, tool, e.detail ?? null);
+        this.note(r, e.detail ? `${tool} · ${e.detail}` : tool);
         break;
       }
       case 'agent.waiting': {
@@ -270,11 +310,12 @@ export class TownSim {
         break;
       }
       case 'agent.departed':
-        if (r.state === 'resting') break;
+        if (r.state === 'resting' || r.state === 'posted') break;
         for (const x of this.runnersOf(r)) x.done = true;
         r.queue.length = 0;
         r.intent = null;
         this.leaveStation(r);
+        if (r.post) { this.goPost(r); this.note(r, 'run over, back on watch'); break; }
         this.goHome(r);
         this.note(r, 'went home');
         break;
@@ -286,7 +327,7 @@ export class TownSim {
     const home = this.map.homes[hashString(parentId ?? id) % this.map.homes.length]!;
     const pos = tileCenter(this.map.entrance);
     return {
-      id, kind, parentId, name, role, title: null, home, isChild, memory: false,
+      id, kind, parentId, name, role, title: null, home, isChild, memory: false, post: null,
       x: pos.x, y: pos.y, facing: 'up', anim: 'stand', style: 'desk', state: 'arriving',
       porch: null, place: null, station: null, intent: null, queue: [], path: [], pathIndex: 0,
       hold: 0, quiet: 0, done: false, failed: false, bubble: null, emote: null, emoteUntil: 0,
@@ -298,6 +339,16 @@ export class TownSim {
     const r = this.makeResident(e.agentId, e.displayName ?? `Agent ${e.agentId.slice(-4)}`, e.role ?? 'general', 'session', null);
     r.title = e.title ?? null;
     this.residents.set(r.id, r);
+    if (r.role === 'scheduled') {
+      // a keeper: takes a post by a lamp and stands there between runs
+      const free = this.posts.filter((p) => !this.postsTaken.has(`${p.x},${p.y}`));
+      const post = free[hashString(r.id) % Math.max(1, free.length)] ?? this.posts[0] ?? r.home.door;
+      this.postsTaken.set(`${post.x},${post.y}`, r.id);
+      r.post = post;
+      this.note(r, 'took up a post');
+      this.enqueue(r, { target: THINK_TARGET, tool: null, tile: post });
+      return r;
+    }
     this.note(r, r.isChild ? 'arrived to help' : 'arrived in town');
     this.enqueue(r, { target: { place: 'hall', style: 'desk', verb: 'checking in' }, tool: null });
     return r;
@@ -311,9 +362,10 @@ export class TownSim {
   }
 
   /** A tool call leaves the coordinator's side as a runner. */
-  private dispatch(r: Resident, tool: string): void {
+  private dispatch(r: Resident, tool: string, detail: string | null): void {
     const target = targetForTool(tool);
-    const label = tool.replace(/^mcp__.*?__/, '');
+    const label = detail ?? tool.replace(/^mcp__.*?__/, '');
+    const stall = detail ? this.stallFor(detail) : null;
     const out = this.runnersOf(r);
     if (out.length >= MAX_RUNNERS_PER_SESSION) {
       // too many out at once: the oldest is called back so the newest can go
@@ -326,7 +378,7 @@ export class TownSim {
     runner.history = [{ at: this.time, text: `sent by ${r.name}` }];
     this.residents.set(runner.id, runner);
     r.runnerCount += 1;
-    this.startIntent(runner, { target, tool: label });
+    this.startIntent(runner, stall ? { target, tool: label, stationId: stall.id } : { target, tool: label });
     r.bubble = null;
     this.setEmote(r, 'think', 2);
     if (r.state === 'idle' || r.state === 'waiting') r.state = 'working';
@@ -363,7 +415,16 @@ export class TownSim {
     r.place = null;
   }
 
-  private stationFor(r: Resident, place: Place): { station: Station | null; tile: Point } {
+  private stationFor(r: Resident, place: Place, preferred?: string): { station: Station | null; tile: Point } {
+    if (preferred) {
+      const own = this.map.stations.find((s) => s.id === preferred);
+      if (own && !this.occupied.has(own.id)) return { station: own, tile: own.tile };
+      if (own) {
+        // the stall is busy: wait beside it
+        const near = nearestWalkable(this.map.grid, { x: own.tile.x, y: own.tile.y + 1 }, 2);
+        if (near) return { station: null, tile: near };
+      }
+    }
     const free = this.map.stations.filter((s) => s.place === place && !this.occupied.has(s.id));
     const here = { x: Math.floor(r.x / TILE), y: Math.floor(r.y / TILE) };
     if (free.length > 0) {
@@ -401,7 +462,7 @@ export class TownSim {
     if (intent.home) target = r.home.door;
     else if (intent.tile) target = intent.tile;
     else {
-      const pick = this.stationFor(r, intent.target.place);
+      const pick = this.stationFor(r, intent.target.place, intent.stationId);
       if (pick.station) { this.occupied.set(pick.station.id, r.id); r.station = pick.station; }
       target = pick.tile;
     }
@@ -423,8 +484,18 @@ export class TownSim {
     this.startIntent(r, { target: IDLE_TARGET, tool: null, home: true });
   }
 
+  /** A keeper returns to its post by the lamp. */
+  private goPost(r: Resident): void {
+    this.leaveStation(r);
+    const post = r.post ?? r.home.door;
+    r.intent = { target: THINK_TARGET, tool: null, tile: post };
+    this.walkTo(r, post);
+    r.state = 'moving';
+  }
+
   /** The coordinator goes to stand at its own door, facing you. */
   private goWait(r: Resident): void {
+    if (r.post) { this.goPost(r); return; }
     this.leaveStation(r);
     r.intent = { target: IDLE_TARGET, tool: null, tile: r.home.door };
     this.walkTo(r, r.home.door);
@@ -476,6 +547,16 @@ export class TownSim {
       return;
     }
     if (intent.tile) {
+      if (r.post && intent.tile.x === r.post.x && intent.tile.y === r.post.y) {
+        r.state = 'posted';
+        r.anim = 'stand';
+        r.facing = 'down';
+        r.hold = 0;
+        r.quiet = 0;
+        r.bubble = 'on watch';
+        r.place = null;
+        return;
+      }
       if (intent.target.verb === 'pinning') {
         r.state = 'pinning';
         r.anim = 'work';
@@ -512,9 +593,10 @@ export class TownSim {
       r.clock += dt;
       if (r.emote && this.time > r.emoteUntil) r.emote = null;
       if (r.kind === 'runner') { this.updateRunner(r, dt); continue; }
-      // waited at the door long enough: sit down on the porch
+      // waited at the door long enough: sit down on the porch (keepers go back on watch instead)
       if ((r.state === 'waiting' || r.state === 'idle' || r.state === 'working' || r.state === 'celebrating' || r.state === 'failed' || r.state === 'arriving')
         && !r.memory && this.time - r.lastEventAt > IDLE_HOME_SECONDS) {
+        if (r.post) { r.queue.length = 0; r.intent = null; this.leaveStation(r); this.goPost(r); continue; }
         r.queue.length = 0;
         r.intent = null;
         this.leaveStation(r);
@@ -555,6 +637,12 @@ export class TownSim {
         case 'waiting': {
           r.quiet += dt;
           if (r.quiet > 120 && Math.random() < dt * 0.04) { this.setEmote(r, 'zzz', 3); }
+          break;
+        }
+        case 'posted': {
+          r.quiet += dt;
+          // a keeper looks around now and then; it never leaves its post on its own
+          if (r.quiet > 40 && Math.random() < dt * 0.05) { r.facing = (['left', 'right', 'down'] as const)[Math.floor(Math.random() * 3)]!; r.quiet = 15; }
           break;
         }
         case 'moving':

@@ -28,6 +28,8 @@ export const LIMITS = Object.freeze({
    * case.
    */
   staleSeconds: 15 * 60,
+  /** A scheduled job's keeper stands at its post between runs; it is only stale after a day. */
+  scheduledStaleSeconds: 24 * 3600,
   /** Recent events retained per resident, on top of its current spawn event. */
   maxEventsPerAgent: 48,
   /** Ingress ids remembered for de-duplication. */
@@ -321,6 +323,11 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
           const last = agent.events.length > 0 ? agent.events[agent.events.length - 1] : agent.spawn;
           const lastEventAt = last ? last.at : 0;
           let left = false;
+          if (agent.role === 'scheduled') {
+            // A keeper is stationary: a finished run is not a departure.
+            if (now - lastEventAt > bounds.scheduledStaleSeconds) { skip.add(agent.key); omitted.stale += 1; }
+            continue;
+          }
           if (agent.departed) { skip.add(agent.key); omitted.departed += 1; left = true; }
           else if (now - lastEventAt > bounds.staleSeconds) { skip.add(agent.key); omitted.stale += 1; left = true; }
           if (left && agent.spawn && now - lastEventAt < 24 * 3600 && agent.key.startsWith('h/main/')) {

@@ -35,6 +35,7 @@ export const ROLES = Object.freeze([
   'review',
   'tooling',
   'general',
+  'scheduled',
 ]);
 
 export const KINDS = Object.freeze([
@@ -61,6 +62,7 @@ export const ROLE_DISTRICT = Object.freeze({
   fabrication: 'forge-ward',
   review: 'review-heights',
   tooling: 'deployment-docks',
+  scheduled: 'central-plaza',
 });
 
 /** Display-name stem. One word per role category, nothing agent-specific. */
@@ -71,6 +73,7 @@ const ROLE_TITLE = Object.freeze({
   review: 'Reviewer',
   tooling: 'Operator',
   general: 'Agent',
+  scheduled: 'Keeper',
 });
 
 /** What the status panel prints for an assignment, per role. */
@@ -81,6 +84,7 @@ const ROLE_ACTION = Object.freeze({
   review: 'review task',
   tooling: 'tooling task',
   general: 'delegated task',
+  scheduled: 'scheduled run',
 });
 
 const OUTCOME_ACTION = Object.freeze({
@@ -97,12 +101,14 @@ const FAILURE_REASON = Object.freeze({
   cancelled: 'cancelled',
 });
 
-export const AGENT_KEY = /^h\/(main|child)\/[0-9a-f]{16}$/;
+export const AGENT_KEY = /^h\/(main|child|cron)\/[0-9a-f]{16}$/;
 export const INGRESS_ID = /^[A-Za-z0-9_-]{8,64}$/;
 export const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /** Every key an ingress event may carry. Anything else rejects the request. */
-export const INGRESS_EVENT_KEYS = Object.freeze(['id', 'key', 'kind', 'role', 'tool', 'outcome']);
+export const INGRESS_EVENT_KEYS = Object.freeze(['id', 'key', 'kind', 'role', 'tool', 'outcome', 'detail']);
+/** The one optional word a tool_started may carry: a skill name, opt-in on the plugin side. */
+export const DETAIL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /**
  * Generic display name: role class plus a four-character pseudonym slice.
@@ -133,7 +139,9 @@ export function townEventBody(ingress, role) {
     case 'tool_started':
       // District is left null on purpose: the town's own tool-to-district
       // table decides where a tool is performed, so the wire never has to.
-      return { type: 'agent.tool_started', tool: ingress.tool, district: null };
+      return ingress.detail !== undefined
+        ? { type: 'agent.tool_started', tool: ingress.tool, district: null, detail: ingress.detail }
+        : { type: 'agent.tool_started', tool: ingress.tool, district: null };
     case 'waiting':
       return { type: 'agent.waiting', action: outcome === 'ok' ? 'tool completed' : 'waiting' };
     case 'completed':

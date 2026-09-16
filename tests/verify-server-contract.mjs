@@ -12,7 +12,7 @@ import { createTownServer } from '../server/townServer.mjs';
 const PRIVATE = 'HT_PRIVATE_SENTINEL';
 const PUBLIC_EVENT_KEYS = new Set([
   'cursor', 'id', 'seq', 'at', 'agentId', 'type', 'role', 'displayName',
-  'district', 'action', 'tool', 'reason',
+  'district', 'action', 'tool', 'reason', 'detail',
 ]);
 const token = crypto.randomBytes(32).toString('base64url');
 const key = 'h/main/0123456789abcdef';

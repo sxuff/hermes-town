@@ -72,6 +72,8 @@ export class TownScene extends Phaser.Scene {
   /** One reusable image for stamping glows into render textures. */
   private stamp!: Phaser.GameObjects.Image;
   private frameParity = 0;
+  /** A label over each market stall that a skill has claimed. */
+  private stallLabels = new Map<string, Phaser.GameObjects.Text>();
 
   constructor() { super('town'); }
 
@@ -431,6 +433,7 @@ export class TownScene extends Phaser.Scene {
       if (bv.smoke) bv.smoke.emitting = act > 0.2;
     }
 
+    this.updateStallLabels();
     this.updateWind(dt);
     this.frameParity ^= 1;
     if (this.frameParity) this.drawClouds(dt * 2); else this.drawNight();
@@ -477,6 +480,26 @@ export class TownScene extends Phaser.Scene {
     }
   }
 
+  /** Skills own stalls: name each claimed stall, clear the ones given up. */
+  private updateStallLabels(): void {
+    const sim = this.opts.sim;
+    const seen = new Set<string>();
+    for (const [skill, stationId] of sim.stalls) {
+      seen.add(stationId);
+      let label = this.stallLabels.get(stationId);
+      const station = this.opts.map.stations.find((s) => s.id === stationId);
+      if (!station) continue;
+      if (!label) {
+        label = this.add.text(station.prop.x + 12, station.prop.y - 16, '', { fontFamily: 'monospace', fontSize: '6px', color: '#f3e6c9', backgroundColor: 'rgba(20,17,26,0.7)', padding: { x: 2, y: 1 } })
+          .setOrigin(0.5, 1).setResolution(6).setDepth(100001).setAlpha(0.95);
+        this.stallLabels.set(stationId, label);
+      }
+      if (label.text !== skill) label.setText(skill);
+      label.setVisible(true);
+    }
+    for (const [stationId, label] of this.stallLabels) if (!seen.has(stationId)) label.setVisible(false);
+  }
+
   // ------------------------------------------------------------ residents
 
   private makeView(r: Resident): ResidentView {
@@ -514,7 +537,7 @@ export class TownScene extends Phaser.Scene {
     v.shadow.setAlpha(0.9 * alpha);
     v.name.setAlpha(0.9 * alpha);
     const selected = this.selected === r.id;
-    v.name.setColor(selected ? '#ffd36b' : r.kind === 'runner' ? '#a9c4d6' : r.isChild ? '#c9b58f' : r.memory ? '#8f8677' : '#f3e6c9');
+    v.name.setColor(selected ? '#ffd36b' : r.kind === 'runner' ? '#a9c4d6' : r.role === 'scheduled' ? '#9fd0e0' : r.isChild ? '#c9b58f' : r.memory ? '#8f8677' : '#f3e6c9');
 
     let animKey: string;
     let flip = false;
