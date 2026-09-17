@@ -71,16 +71,23 @@ def main() -> int:
         completed=True, failed=False, interrupted=False,
     )
 
+    # An empty queue is not a finished delivery: the worker drains the queue
+    # before it POSTs the batch, so wait until every enqueued event has had
+    # its delivery attempt. Otherwise this process can exit with the final
+    # batch still in flight on the daemon thread, and the town never sees it.
     bridge = plugin._get_bridge()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        if bridge._queue.empty() and bridge.delivered > 0:
+        if bridge.enqueued > 0 and bridge.processed == bridge.enqueued:
             break
         time.sleep(0.05)
-    ok = bridge._queue.empty() and bridge.delivered > 0 and bridge.delivery_failures == 0
+    ok = (bridge.enqueued > 0 and bridge.processed == bridge.enqueued
+          and bridge.delivery_failures == 0)
     print(json.dumps({
         "ok": ok,
         "deliveredBatches": bridge.delivered,
+        "enqueued": bridge.enqueued,
+        "processed": bridge.processed,
         "deliveryFailures": bridge.delivery_failures,
         "queueEmpty": bridge._queue.empty(),
     }))

@@ -344,6 +344,10 @@ class _Bridge:
         self.dropped = 0
         self.delivered = 0
         self.delivery_failures = 0
+        # Events accepted into the queue, and events whose batch has finished
+        # its delivery attempt. Equal means nothing is queued or in flight.
+        self.enqueued = 0
+        self.processed = 0
         self.unclassified_stops = 0
         # A child whose own run_conversation ended before its parent reported
         # what really happened. Published nothing; see _on_session_end.
@@ -469,6 +473,7 @@ class _Bridge:
             event["outcome"] = outcome
         try:
             self._queue.put_nowait(event)
+            self.enqueued += 1
         except queue.Full:
             # Drop the newest. An old event still in the queue describes a
             # transition the town has not seen yet; a new one usually does not.
@@ -502,6 +507,7 @@ class _Bridge:
                     break
             for body in self._bodies(batch):
                 self._deliver(body)
+            self.processed += len(batch)
 
     def _bodies(self, batch):
         """Split one batch into <= 8 KiB JSON bodies."""
