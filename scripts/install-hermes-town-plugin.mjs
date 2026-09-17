@@ -131,15 +131,24 @@ function main() {
   const target = path.join(home, 'plugins', PLUGIN_ID);
   fs.mkdirSync(target, { recursive: true, mode: 0o755 });
 
-  const copied = PLUGIN_FILES.map((file) => ({
-    file,
-    outcome: syncFile(path.join(source, file), path.join(target, file)),
-  }));
+  // A directory Hermes installed from its plugin catalog carries a provenance
+  // sidecar and is pinned to a reviewed commit. Overwriting it would move the
+  // code off that pin behind Hermes' back, so leave it alone and only make
+  // sure the token exists.
+  const catalogManaged = fs.existsSync(path.join(target, '.hermes-catalog.json'));
+  const copied = catalogManaged
+    ? PLUGIN_FILES.map((file) => ({ file, outcome: 'catalog-managed, left untouched' }))
+    : PLUGIN_FILES.map((file) => ({
+      file,
+      outcome: syncFile(path.join(source, file), path.join(target, file)),
+    }));
 
   const tokenPath = path.join(home, 'hermes-town', 'runtime', 'bridge-token');
   const tokenOutcome = ensureToken(tokenPath, options.force);
 
-  console.log('Hermes Town bridge plugin installed.');
+  console.log(catalogManaged
+    ? 'Hermes Town bridge plugin is installed from the Hermes catalog; token checked.'
+    : 'Hermes Town bridge plugin installed.');
   console.log('');
   console.log(`  hermes home    ${home}`);
   console.log(`  plugin         ${target}`);

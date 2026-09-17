@@ -38,11 +38,12 @@ src/sim/town.ts → src/scenes/TownScene.ts
 The plugin can publish only:
 
 - `id`: random event identifier used for de-duplication
-- `key`: `h/<main|child>/<16 hex>`, derived from a raw execution-context identifier with HMAC-SHA256
+- `key`: `h/<main|child|cron>/<16 hex>`, derived from a raw execution-context identifier (or a cron job id) with HMAC-SHA256
 - `kind`: `spawned`, `assigned`, `tool_started`, `waiting`, `completed`, `failed`, or `departed`
-- `role`: `coordinator`, `research`, `fabrication`, `review`, `tooling`, or `general`
+- `role`: `coordinator`, `research`, `fabrication`, `review`, `tooling`, `general`, or `scheduled`
 - `tool`: a value matching `^[A-Za-z0-9_.:-]{1,64}$`, otherwise `tool`
 - `outcome`: `ok`, `error`, `interrupted`, or `cancelled`
+- `detail`: a skill name on `tool_started`, same pattern as `tool`, only when `HERMES_TOWN_SKILL_NAMES=1` opts in
 
 The server rejects an entire request if an event contains any unknown field. It does not strip an unexpected field and continue.
 

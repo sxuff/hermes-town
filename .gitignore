@@ -20,3 +20,7 @@ runtime/
 
 # Editor and assistant launch configs are per-machine, not project source.
 .claude/
+
+# Launch-video working files.
+brag-output/
+brag-src/

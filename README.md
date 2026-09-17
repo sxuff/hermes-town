@@ -54,6 +54,8 @@ Scheduled jobs do not wait for their first run: the server reads the scheduler's
 Only each entry's id and enabled flag are read, never a prompt or schedule. See
 [Scheduled runs](LIVE_BRIDGE.md#scheduled-runs-and-skill-names).
 
+If you installed the plugin from the Hermes catalog with `hermes plugins install hermes-town`, the plugin files are already in place and managed by Hermes. You still need this repository for the server and the bridge token. Run the same commands: the installer recognises a catalog install, leaves it untouched, and only creates the token.
+
 For a non-default profile or Hermes home:
 
 ```bash
@@ -65,16 +67,40 @@ node scripts/install-hermes-town-plugin.mjs --hermes-home /path/to/hermes-home
 The plugin publishes only:
 
 - a pseudonymous resident key derived with HMAC
-- one of six role classes
+- one of seven role classes
 - one of seven lifecycle kinds
 - a sanitized tool name when a tool starts
 - one of four outcome classifications
+- a skill name, only when `HERMES_TOWN_SKILL_NAMES=1` opts in
 
 Prompts, messages, tool arguments, commands, paths, tool output, assistant responses, child goals, summaries, raw errors, raw runtime identifiers, and credentials have no field in the wire contract. The plugin and server both enforce allowlists.
 
 The live server is for same-host use. It binds to `127.0.0.1`, sends no CORS headers, and serves an authenticated ingest endpoint plus read-only snapshot, SSE, and health routes. Do not expose a live town publicly. If you want a public showcase, use demo mode with no Hermes connection.
 
 See [LIVE_BRIDGE.md](LIVE_BRIDGE.md) for the full contract and runbook.
+
+## How events become behaviour
+
+A session is one resident, the coordinator. It thinks at a hall desk. Every
+tool call dispatches a runner: a smaller figure that leaves the desk, goes to
+that tool's building, works there for a few real seconds, and walks back with
+the result (a tick, or smoke if the tool failed). A turn with six tool calls
+is six runners fanning out across town while the coordinator sits thinking.
+When the turn ends the coordinator walks to the notice board in the square,
+pins the result, and goes to stand at its own front door with a "waiting for
+you" bubble until the next turn. Ten minutes of silence and it sits down on
+the porch; half an hour later it is forgotten. Subagents are full residents
+with their own runners. Sessions from earlier today sit dim on their porches.
+
+Every figure on screen is one session, one subagent, or one tool call. Nothing
+is invented to fill the frame.
+
+The director (a HUD toggle, on by default) follows whoever most recently had
+something happen when three or fewer sessions are active, at 3x, and backs
+off for 45 seconds whenever you move the camera yourself.
+
+The tool-to-building table in `src/sim/toolMap.ts` covers the Hermes tool
+registry and the common Claude Code names. Unknown tools go to the market.
 
 ## Controls
 
@@ -115,26 +141,3 @@ hermes plugins doctor integrations/hermes-town-plugin --ci
 ## License
 
 Hermes Town, including the code and shipped original assets, is licensed under the [MIT License](LICENSE).
-
-## How events become behaviour
-
-A session is one resident, the coordinator. It thinks at a hall desk. Every
-tool call dispatches a runner: a smaller figure that leaves the desk, goes to
-that tool's building, works there for a few real seconds, and walks back with
-the result (a tick, or smoke if the tool failed). A turn with six tool calls
-is six runners fanning out across town while the coordinator sits thinking.
-When the turn ends the coordinator walks to the notice board in the square,
-pins the result, and goes to stand at its own front door with a "waiting for
-you" bubble until the next turn. Ten minutes of silence and it sits down on
-the porch; half an hour later it is forgotten. Subagents are full residents
-with their own runners. Sessions from earlier today sit dim on their porches.
-
-Every figure on screen is one session, one subagent, or one tool call. Nothing
-is invented to fill the frame.
-
-The director (a HUD toggle, on by default) follows whoever most recently had
-something happen when three or fewer sessions are active, at 3x, and backs
-off for 45 seconds whenever you move the camera yourself.
-
-The tool-to-building table in `src/sim/toolMap.ts` covers the Hermes tool
-registry and the common Claude Code names. Unknown tools go to the market.

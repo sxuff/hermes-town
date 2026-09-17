@@ -1,7 +1,8 @@
 name: hermes-town
-version: 0.1.0
+version: 0.2.0
 manifest_version: 2
 api_version: 1
+requires_hermes: ">=0.21"
 description: >-
   Passive Hermes Town bridge. Publishes bounded, pseudonymous agent lifecycle
   metadata to a same-host Town live server. Registers no tools, injects no

@@ -296,7 +296,10 @@ def _read_token(path: str) -> Optional[str]:
     if not stat.S_ISREG(info.st_mode):
         logger.warning("hermes-town: bridge token path is not a regular file; bridge inert")
         return None
-    if info.st_mode & 0o077:
+    # Windows has no POSIX mode bits: stat reports 0o666 for every file, so
+    # the check would keep the bridge inert there. NTFS ACLs protect the file,
+    # and the server applies the same rule.
+    if os.name != "nt" and info.st_mode & 0o077:
         logger.warning(
             "hermes-town: bridge token file is group/world accessible; bridge inert "
             "(chmod 600 the file to enable)"

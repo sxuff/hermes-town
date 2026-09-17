@@ -30,11 +30,12 @@ The plugin registers no tools, commands, middleware, or prompt context. Pre-call
 Each event can contain only:
 
 - `id`: random event identifier for de-duplication
-- `key`: HMAC-derived `h/<main|child>/<16 hex>` resident key
+- `key`: HMAC-derived `h/<main|child|cron>/<16 hex>` resident key
 - `kind`: closed lifecycle enum
 - `role`: closed role enum
 - `tool`: sanitized tool name on `tool_started`
 - `outcome`: closed outcome enum when applicable
+- `detail`: a skill name on `tool_started`, only when `HERMES_TOWN_SKILL_NAMES=1` opts in
 
 All other callback fields are ignored. The queue is bounded to 512 events, delivery uses one daemon worker, request bodies are capped at 8 KiB, and the HTTP timeout is 0.5 seconds.
 
