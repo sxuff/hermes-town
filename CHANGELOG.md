@@ -2,6 +2,17 @@
 
 All notable changes to Hermes Town are documented here.
 
+## Unreleased
+
+### Live bridge
+
+- Cron keepers stand at their posts from server boot. The live server derives each enabled job's keeper key with the same HMAC the plugin uses, from the job ids in `$HERMES_HOME/cron/jobs.json` (only ids and enabled flags are read). When the job fires, the plugin's event lands on the seeded resident. `--cron-jobs PATH` overrides the file; `--no-cron-seeds` opts out.
+- Keepers share the least-crowded lamp post when enabled jobs outnumber lamps.
+
+### Verification
+
+- `tests/verify-cron-seed.mjs` pins cross-language key agreement with the plugin, enabled-only seeding, no fork when the plugin's spawn arrives, idempotent reseeding, and absence of jobs-file content from public surfaces. Part of `test:contracts`.
+
 ## 0.1.0 - 2026-09-17
 
 First tagged release: the developer preview plus everything that shipped on

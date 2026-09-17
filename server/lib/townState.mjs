@@ -50,7 +50,7 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
   }
   const bounds = { ...LIMITS, ...limits };
 
-  /** @type {Map<string, {key: string, role: string, seq: number, lastCursor: number, departed: boolean, spawn: object|null, events: object[]}>} */
+  /** @type {Map<string, {key: string, role: string, seq: number, lastCursor: number, departed: boolean, spawn: object|null, events: object[], configured: boolean}>} */
   const agents = new Map();
   const dedupe = new Set();
   const dedupeOrder = [];
@@ -82,7 +82,7 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
     // A brand-new resident is the *hottest*, not the coldest: seeding its
     // cursor at the current high-water mark is what stops the eviction pass
     // below from immediately evicting the agent it was just asked to create.
-    agent = { key, role, seq: 0, lastCursor: cursor, departed: false, spawn: null, events: [] };
+    agent = { key, role, seq: 0, lastCursor: cursor, departed: false, spawn: null, events: [], configured: false };
     agents.set(key, agent);
     evictAgents();
     return agent;
@@ -285,6 +285,46 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
     return event;
   }
 
+  // -- configured keepers ----------------------------------------------------
+
+  /**
+   * Stand keepers up before their first run.
+   *
+   * `seeds` are `{key}` entries the caller derived from the scheduler's own
+   * job ids, with the same HMAC the plugin uses for a `cron_<id>_<stamp>`
+   * session, so the key a seeded keeper carries is byte-identical to the key
+   * the plugin will carry the moment the job fires. Each seed goes through the
+   * normal emit path as a `spawned`, so cursors, the journal, and SSE replay
+   * need no special case.
+   *
+   * Two honesty rules:
+   * - A resident the projection already knows is never re-spawned. A keeper
+   *   from a past run, or a resident that already arrived over the wire, keeps
+   *   its state; only a truly new key gets a spawn.
+   * - A seed whose spawn comes from the journal replay (a restart) is idempotent:
+   *   the dedupe id below is stable per stream, so a reseed never appends a
+   *   second spawn line for the same keeper.
+   */
+  function seedKeepers(seeds) {
+    const published = [];
+    for (const seed of seeds) {
+      if (typeof seed?.key !== 'string') continue;
+      if (agents.has(seed.key)) continue;
+      published.push(emit(`seed~cron~${seed.key}`, {
+        key: seed.key, kind: 'spawned', role: 'scheduled',
+      }, 'scheduled'));
+    }
+    // Mark every scheduled resident with a seed entry as configured, so a
+    // job that has not fired for a day keeps its keeper on watch instead of
+    // aging out of the present-town snapshot.
+    for (const seed of seeds) {
+      const agent = typeof seed?.key === 'string' ? agents.get(seed.key) : undefined;
+      if (agent && agent.role === 'scheduled') agent.configured = true;
+    }
+    if (published.length > 0) maybeCompact();
+    return published.map(publicEvent);
+  }
+
   // -- public surface ------------------------------------------------------
 
   const loadReport = load();
@@ -294,6 +334,7 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
     get cursor() { return cursor; },
     get loadReport() { return loadReport; },
     ingest,
+    seedKeepers,
     /**
      * Everything a fresh client needs. When `since` is inside the retained
      * cursor window and `expectedStreamId` names this journal, return only newer
@@ -325,6 +366,9 @@ export function createTownState({ journalPath, limits = LIMITS, clock = nowSecon
           let left = false;
           if (agent.role === 'scheduled') {
             // A keeper is stationary: a finished run is not a departure.
+            // A keeper the server seeded from the scheduler's job file never
+            // leaves: the job is configured, so silence is not staleness.
+            if (agent.configured) continue;
             if (now - lastEventAt > bounds.scheduledStaleSeconds) { skip.add(agent.key); omitted.stale += 1; }
             continue;
           }

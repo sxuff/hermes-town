@@ -172,12 +172,16 @@ function readCappedBody(req, limit) {
  * @param {string} options.journalPath      durable bounded journal
  * @param {string|null} options.staticRoot  built app to serve, or null
  * @param {number} [options.heartbeatSeconds]
+ * @param {{key: string}[]} [options.cronSeeds]  keeper keys derived from the
+ *        scheduler's own job ids, stood up at boot (see lib/cronSeed.mjs)
  */
-export function createTownServer({ token, journalPath, staticRoot = null, heartbeatSeconds = 15 }) {
+export function createTownServer({ token, journalPath, staticRoot = null, heartbeatSeconds = 15, cronSeeds = [] }) {
   if (typeof token !== 'string' || tokenStrengthBits(token) < MIN_TOKEN_BITS) {
     throw new Error('createTownServer requires a strong bridge token');
   }
   const state = createTownState({ journalPath });
+  const seededKeepers = state.seedKeepers(cronSeeds);
+
   const root = staticRoot === null ? null : path.resolve(staticRoot);
   const startedAt = Date.now();
 
@@ -431,6 +435,8 @@ export function createTownServer({ token, journalPath, staticRoot = null, heartb
   return {
     server,
     state,
+    /** Public events the boot seed published (one spawn per new keeper). */
+    seededKeepers,
     listen(port, host = '127.0.0.1') {
       if (!isLoopbackHost(host)) {
         return Promise.reject(new Error(`Hermes Town only binds to loopback hosts, received: ${host}`));

@@ -14,7 +14,7 @@
     "serve:live": "node server/serve-live.mjs",
     "install:plugin": "node scripts/install-hermes-town-plugin.mjs",
     "typecheck": "tsc -b",
-    "test:contracts": "python3 tests/verify-plugin-privacy.py && node tests/verify-server-contract.mjs",
+    "test:contracts": "python3 tests/verify-plugin-privacy.py && node tests/verify-server-contract.mjs && node tests/verify-cron-seed.mjs",
     "test": "npm run test:contracts && npm run build && npm run verify:world",
     "verify:world": "node scripts/verify-world.mjs"
   },

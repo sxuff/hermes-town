@@ -143,9 +143,22 @@ run of one job is the same resident: a keeper with the `scheduled` role. The
 town gives each keeper a post beside a lamp in the square. Between runs it
 stands there on watch; when the job fires it thinks at the hall, sends its
 runners out, pins the result and walks back to its post. A finished run is not
-a departure, and a keeper is only dropped from a fresh snapshot after a day of
-silence. The job id and timestamp are HMAC input only and never leave the
-process; the keeper's name is `Keeper` plus four pseudonym characters.
+a departure, and an unseeded keeper is only dropped from a fresh snapshot after
+a day of silence. The job id and timestamp are HMAC input only and never leave
+the process; the keeper's name is `Keeper` plus four pseudonym characters.
+
+Because the keeper key is deterministic (HMAC of the job id under a key
+derived from the bridge token), the server can compute it itself and stand the
+keepers up at boot, before any job fires. At startup it reads `$HERMES_HOME/
+cron/jobs.json` (override with `--cron-jobs`, disable with `--no-cron-seeds`),
+takes only each entry's `id` and `enabled` flag, and seeds one keeper per
+enabled job. The jobs file also carries prompts, names, models, and workdirs;
+none of those are ever read, and nothing but derived keys reaches a public
+surface. A seeded keeper never ages out: the job is configured, so silence is
+not staleness. When the job later fires, the plugin's event carries the same
+key, lands on the seeded resident, and normal run choreography takes over;
+there is no second resident and no rename. More enabled jobs than lamps is
+fine: keepers share the least-crowded post.
 
 Skill names are an opt-in. With `HERMES_TOWN_SKILL_NAMES=1` in the Hermes
 process environment, a `skill_view` or `skill_manage` call publishes the
@@ -191,8 +204,9 @@ Defaults:
 - token: `$HERMES_HOME/hermes-town/runtime/bridge-token`
 - journal: `runtime/town-journal.jsonl`
 - static files: `dist/`
+- cron keepers: seeded from `$HERMES_HOME/cron/jobs.json`
 
-Server flags include `--port`, `--host`, `--token-file`, `--journal`, `--static`, `--no-static`, and `--heartbeat-seconds`. The `--host` value is restricted to `127.0.0.1`, `localhost`, or `::1`.
+Server flags include `--port`, `--host`, `--token-file`, `--journal`, `--static`, `--no-static`, `--heartbeat-seconds`, `--cron-jobs PATH`, and `--no-cron-seeds`. The `--host` value is restricted to `127.0.0.1`, `localhost`, or `::1`.
 
 ### 4. Restart the observed Hermes process
 
@@ -229,4 +243,4 @@ npm run verify:world
 hermes plugins doctor integrations/hermes-town-plugin --ci
 ```
 
-`tests/verify-plugin-privacy.py` registers all ten hooks, fires each one with private sentinel values, and checks the captured queue. `tests/verify-server-contract.mjs` exercises loopback-only binding, authenticated and unauthenticated HTTP ingress, unknown-field rejection, real plugin delivery, the public snapshot, security headers, and token/path absence. `scripts/verify-world.mjs` exercises the actual browser UI and simulation.
+`tests/verify-plugin-privacy.py` registers all ten hooks, fires each one with private sentinel values, and checks the captured queue. `tests/verify-server-contract.mjs` exercises loopback-only binding, authenticated and unauthenticated HTTP ingress, unknown-field rejection, real plugin delivery, the public snapshot, security headers, and token/path absence. `tests/verify-cron-seed.mjs` derives keeper keys in Node and Python for the same job id and proves they agree, then checks seeding behaviour against the live server. `scripts/verify-world.mjs` exercises the actual browser UI and simulation.

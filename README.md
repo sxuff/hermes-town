@@ -49,6 +49,11 @@ hermes gateway restart
 
 Open `http://127.0.0.1:4187/` and run a real turn. The default page is live mode. Use `?agents=demo` for the scripted demo.
 
+Scheduled jobs do not wait for their first run: the server reads the scheduler's
+`cron/jobs.json` at boot and stands a keeper at its post for every enabled job.
+Only each entry's id and enabled flag are read, never a prompt or schedule. See
+[Scheduled runs](LIVE_BRIDGE.md#scheduled-runs-and-skill-names).
+
 For a non-default profile or Hermes home:
 
 ```bash
@@ -105,7 +110,7 @@ npm run verify:world
 hermes plugins doctor integrations/hermes-town-plugin --ci
 ```
 
-`test:contracts` checks the plugin privacy allowlist and the real HTTP server contract. `verify:world` exercises navigation, resident lifecycle behavior, camera controls, offline-live honesty, and visual captures in Chromium.
+`test:contracts` checks the plugin privacy allowlist, the real HTTP server contract, and cron keeper pre-registration, including cross-language key agreement with the plugin. `verify:world` exercises navigation, resident lifecycle behavior, camera controls, offline-live honesty, and visual captures in Chromium.
 
 ## License
 

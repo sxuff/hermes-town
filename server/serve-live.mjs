@@ -14,12 +14,18 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createTownServer, loadToken } from './townServer.mjs';
+import { cronSeedEntries, readEnabledJobIds } from './lib/cronSeed.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 
 function defaultTokenPath() {
   const home = process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes');
   return path.join(home, 'hermes-town', 'runtime', 'bridge-token');
+}
+
+function defaultJobsPath() {
+  const home = process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes');
+  return path.join(home, 'cron', 'jobs.json');
 }
 
 function parseArgs(argv) {
@@ -30,6 +36,9 @@ function parseArgs(argv) {
     journal: path.join(root, 'runtime', 'town-journal.jsonl'),
     staticRoot: path.join(root, 'dist'),
     heartbeatSeconds: 15,
+    // Keepers for scheduled jobs stand at their posts from boot. On by
+    // default when the scheduler's jobs file exists; --no-cron-seeds opts out.
+    cronJobs: process.env.HERMES_TOWN_CRON_JOBS ?? defaultJobsPath(),
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -47,6 +56,8 @@ function parseArgs(argv) {
       case '--static': options.staticRoot = path.resolve(value()); break;
       case '--no-static': options.staticRoot = null; break;
       case '--heartbeat-seconds': options.heartbeatSeconds = Number(value()); break;
+      case '--cron-jobs': options.cronJobs = path.resolve(value()); break;
+      case '--no-cron-seeds': options.cronJobs = null; break;
       case '--help': case '-h': options.help = true; break;
       default: throw new Error(`Unknown argument: ${arg}`);
     }
@@ -69,6 +80,9 @@ if (options.help) {
     '  --static DIR           Built app to serve (default dist)',
     '  --no-static            API only',
     '  --heartbeat-seconds N  SSE heartbeat interval (default 15)',
+    '  --cron-jobs PATH       Scheduler jobs file to seed keepers from',
+    '                         (default $HERMES_HOME/cron/jobs.json)',
+    '  --no-cron-seeds        Do not seed keepers for scheduled jobs',
   ].join('\n'));
   process.exit(0);
 }
@@ -79,13 +93,31 @@ if (options.staticRoot !== null && !fs.existsSync(options.staticRoot)) {
 }
 
 let town;
+let cronNote = 'off';
 try {
   const token = loadToken(options.tokenFile);
+  let cronSeeds = [];
+  if (options.cronJobs !== null) {
+    const jobs = readEnabledJobIds(options.cronJobs);
+    if (jobs.ok && !jobs.absent) {
+      cronSeeds = cronSeedEntries(token, jobs.ids);
+      cronNote = `${cronSeeds.length} keepers from ${options.cronJobs}`
+        + `${jobs.skipped ? `, ${jobs.skipped} entries skipped (disabled or malformed id)` : ''}`;
+    } else if (jobs.ok) {
+      cronNote = `no jobs file at ${options.cronJobs}`;
+    } else {
+      // A jobs file the town cannot parse is a silent no-op by design: the
+      // scheduler is the authority, and the town must not fail to boot or
+      // guess at entries it could not read.
+      cronNote = `jobs file unreadable (${jobs.reason})`;
+    }
+  }
   town = createTownServer({
     token,
     journalPath: options.journal,
     staticRoot: options.staticRoot,
     heartbeatSeconds: options.heartbeatSeconds,
+    cronSeeds,
   });
   await town.listen(options.port, options.host);
 } catch (error) {
@@ -103,6 +135,7 @@ console.log(`  snapshot       GET  ${origin}/api/town/snapshot  (public, read-on
 console.log(`  stream         GET  ${origin}/api/town/events    (public, read-only, SSE)`);
 console.log(`  health         GET  ${origin}/api/town/health`);
 console.log(`  journal        ${options.journal}`);
+console.log(`  cron keepers   ${cronNote}`);
 console.log(`  restored       ${report.restored} events${report.fresh ? ' (fresh journal)' : ''}`
   + `${report.malformedLines > 0 ? `, ${report.malformedLines} malformed lines skipped` : ''}`);
 console.log(`  cursor         ${town.state.cursor}`);

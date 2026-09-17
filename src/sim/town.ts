@@ -115,9 +115,9 @@ export class TownSim {
   private time = 0;
   private runnerSerial = 0;
   private boardTile: Point;
-  /** Where keepers stand: beside the lamps of the square, one each. */
+  /** Where keepers stand: beside the lamps of the square; shared when jobs outnumber lamps. */
   private posts: Point[] = [];
-  private postsTaken = new Map<string, string>();
+  private postsTaken = new Map<string, number>();
   /** Skill name → market station id. Every skill gets its own stall. */
   readonly stalls = new Map<string, string>();
   private stallUse = new Map<string, number>();
@@ -340,10 +340,18 @@ export class TownSim {
     r.title = e.title ?? null;
     this.residents.set(r.id, r);
     if (r.role === 'scheduled') {
-      // a keeper: takes a post by a lamp and stands there between runs
-      const free = this.posts.filter((p) => !this.postsTaken.has(`${p.x},${p.y}`));
-      const post = free[hashString(r.id) % Math.max(1, free.length)] ?? this.posts[0] ?? r.home.door;
-      this.postsTaken.set(`${post.x},${post.y}`, r.id);
+      // a keeper: takes a post by a lamp and stands there between runs.
+      // A real scheduler can hold more enabled jobs than the square has
+      // lamps, so a taken post is shared, least-crowded first, instead of
+      // stacking every extra keeper on the same tile.
+      let post: Point | undefined;
+      let crowd = Infinity;
+      for (const p of this.posts) {
+        const taken = this.postsTaken.get(`${p.x},${p.y}`) ?? 0;
+        if (taken < crowd) { post = p; crowd = taken; }
+      }
+      post = post ?? this.posts[0] ?? r.home.door;
+      this.postsTaken.set(`${post.x},${post.y}`, crowd + 1);
       r.post = post;
       this.note(r, 'took up a post');
       this.enqueue(r, { target: THINK_TARGET, tool: null, tile: post });
