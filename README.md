@@ -14,7 +14,9 @@ A local pixel-art interface for Hermes Agent. Every resident represents a real H
 
 ## Try the demo
 
-The demo uses scripted browser events and does not connect to Hermes.
+A scripted demo runs at [sxuff.github.io/hermes-town](https://sxuff.github.io/hermes-town/). Every session on that page is simulated in the browser; nothing there connects to a Hermes runtime.
+
+To run the same demo locally:
 
 ```bash
 git clone https://github.com/sxuff/hermes-town.git

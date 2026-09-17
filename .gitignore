@@ -17,3 +17,6 @@ output/playwright/
 # server writes while running. Never a credential — the bridge token lives in
 # the Hermes home, not here — but still machine-local state, not source.
 runtime/
+
+# Editor and assistant launch configs are per-machine, not project source.
+.claude/

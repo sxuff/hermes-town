@@ -10,7 +10,10 @@ import { MAP_H, MAP_W, buildTownMap } from './world/map';
 
 
 const params = new URLSearchParams(location.search);
-const mode = params.get('agents') === 'demo' ? 'demo' : 'live';
+// A build can default to the scripted demo (VITE_DEFAULT_AGENTS=demo) for a
+// public showcase; ?agents=demo / ?agents=live always win over the build default.
+const agentsParam = params.get('agents') ?? import.meta.env.VITE_DEFAULT_AGENTS ?? 'live';
+const mode = agentsParam === 'demo' ? 'demo' : 'live';
 const hourParam = params.get('hour');
 const hour = hourParam !== null && Number.isFinite(Number(hourParam)) ? Number(hourParam) : null;
 
