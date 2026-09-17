@@ -139,7 +139,11 @@ export function buildCountryside(local: TownMap): TownMap {
   const cartSpot = { x: 14, y: 58 };
   stroke(wobble([{ x: 19, y: 38 }, { x: cemetery.x + 5, y: cemetery.y + cemetery.h }], r, 0.6), 1, putTrail);
   stroke(wobble([{ x: 12, y: 37 }, { x: 8, y: 26 }, { x: 10, y: 14 }, { x: 16, y: 6 }], r, 1.2), 1, putTrail);
-  stroke(wobble([{ x: 57, y: 63 }, { x: 70, y: 66 }, { x: 84, y: 62 }, { x: meadow.x, y: meadow.y + 5 }], r, 1.2), 1, putTrail);
+  // The meadow trail crosses the stream on one straight row, so its bridge is a
+  // single span rather than two staggered pieces on a diagonal.
+  stroke(wobble([{ x: 57, y: 63 }, { x: 70, y: 66 }, { x: 82, y: 62 }], r, 1.2), 1, putTrail);
+  stroke([{ x: 82, y: 62 }, { x: 93, y: 62 }], 1, putTrail);
+  stroke(wobble([{ x: 93, y: 62 }, { x: meadow.x, y: meadow.y + 5 }], r, 1.2), 1, putTrail);
   stroke(wobble([{ x: 57, y: 9 }, { x: 70, y: 11 }, { x: 84, y: 10 }, { x: 96, y: 8 }, { x: 110, y: 13 }], r, 1.2), 1, putTrail);
   stroke(wobble([{ x: 10, y: 37 }, { x: 8, y: 48 }, { x: cartSpot.x, y: cartSpot.y - 1 }], r, 1.2), 1, putTrail);
   stroke(wobble([{ x: 100, y: 40 }, { x: 104, y: 30 }, { x: 98, y: 20 }], r, 1.2), 1, putTrail);
@@ -232,10 +236,6 @@ export function buildCountryside(local: TownMap): TownMap {
   }
   // Rails and end posts are part of each complete bridge sprite.
   ground[cemetery.y + 3]![cemetery.x + 4] = T.mossStone;
-  // A timber dock reaching into the pond.
-  for (const dx of [0, 1]) { ground[58]![27 + dx] = T.plank; water.delete(key(27 + dx, 58)); }
-  extra.push({ kind: 'dock', x: 28 * TILE, y: 58 * TILE + 1 });
-  extra.push({ kind: 'barrel', x: 26 * TILE + 3, y: 57 * TILE + 2, blocks: [{ x: 26, y: 57 }] });
   // A handcart at the end of the west trail.
   at(cartSpot.x, cartSpot.y, 'cart', -6, -4);
   // a run of dry-stone wall beside the east road
