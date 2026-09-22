@@ -1035,11 +1035,14 @@ HOOKS = (
 
 
 def register(ctx) -> None:
-    """Register ten passive observers. No tools, no commands, no middleware.
+    """Register passive observers and the explicit, opt-in native Town CLI.
 
-    Nothing here opens a socket, reads a token more than once, or blocks: the
-    bridge is constructed lazily on the first hook firing, and the delivery
-    worker starts on the first enqueued event.
+    Registration does not create state, read credentials, or open a socket.
     """
     for name, callback in HOOKS:
         ctx.register_hook(name, callback)
+    register_cli = getattr(ctx, "register_cli_command", None)
+    if callable(register_cli):
+        from .town_cli import setup_parser, handler
+        register_cli(name="town", help="Set up and manage the local Hermes Town",
+                     setup_fn=setup_parser, handler_fn=handler)

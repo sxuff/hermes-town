@@ -31,6 +31,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:contracts
+      - run: npm run test:onboarding
 
   # Advisory: the browser walk-through of the world and the pinned Hermes
   # plugin validator. Both depend on things outside this repository (a
@@ -58,6 +59,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run verify:characters
       - run: npm run verify:world
+      - run: npm run build
+      - run: npm run verify:onboarding
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -71,3 +74,5 @@ jobs:
           git -C /tmp/hermes-agent checkout --detach 49c6d4a9e0dddc64d6333c5b1fcc9d911463a8fd
           python -m pip install -e /tmp/hermes-agent
       - run: hermes plugins validate integrations/hermes-town-plugin
+      - run: hermes plugins doctor integrations/hermes-town-plugin --ci
+      - run: python tests/verify-native-hermes.py --hermes "$(command -v hermes)"

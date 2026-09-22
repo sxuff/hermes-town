@@ -4,13 +4,13 @@ A local pixel-art interface for Hermes Agent. Every resident represents a real H
 
 ![Hermes Town](artifacts/world-remodel.png)
 
-> Developer preview. The native Hermes bridge works, but installation is intentionally explicit while the one-package installer is being built.
+> v0.3.0 packages the bridge, local server, and prebuilt town together. Runtime use needs Hermes and Node.js, not a repository checkout, npm, or a frontend build. Catalog availability follows a separately reviewed pin update.
 
 ## Requirements
 
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) 0.21.2, the validated preview baseline
 - Node.js `^20.19.0` or `>=22.12.0`
-- npm
+- npm only for contributors building from source
 
 ## Try the demo
 
@@ -29,38 +29,68 @@ Open `http://127.0.0.1:5173/?agents=demo&hour=17`.
 
 ## Connect a local Hermes runtime
 
-The installer copies the passive bridge plugin into the selected Hermes home and creates a local token. It does not enable the plugin, edit configuration, restart Hermes, or start the server.
+### Packaged plugin (v0.3.0 and later)
+
+Once the catalog entry points to a release containing this runtime:
+
+```bash
+hermes plugins install hermes-town
+hermes plugins enable hermes-town
+hermes town start
+```
+
+Open the printed local URL, normally `http://127.0.0.1:4187/`. Use `hermes town start --open` to also open a browser on a machine with a graphical session.
+
+Start a **new Hermes CLI session**, or restart the gateway you want to observe, then run a turn. Installing/enabling the plugin does not reload an already-running process. Town never restarts Hermes for you.
+
+```bash
+hermes town status          # setup, server ownership, first-event diagnostics
+hermes town status --json   # machine-readable diagnostics
+hermes town stop            # stop only this profile's managed Town server
+hermes town open            # reopen the browser
+hermes town setup           # optional prerequisite/token check without starting
+```
+
+`start` creates a private token if needed and launches the bundled server on loopback. Repeating it reuses the same healthy managed process. `stop` authenticates that exact process with a separate private management secret, never a PID from a stale file. It does not disable the Hermes plugin. The server is not a login service: after reboot, run `hermes town start` again.
+
+**Already installed v0.2.0?** It contains the bridge only. These commands will not appear until a new release is published, its catalog pin is reviewed, and you run `hermes plugins update hermes-town`. The plugin never downloads replacements for its reviewed code.
+
+### Profiles and remote hosts
+
+Use the same profile for Town and the Hermes process you observe:
+
+```bash
+hermes -p work town start
+hermes -p work town status
+hermes -p work town stop
+```
+
+State stays under that profile's Hermes home. Multiple profiles on one host need distinct ports and matching `HERMES_TOWN_BRIDGE_URL=http://127.0.0.1:PORT/api/town/ingest` in both the observed Hermes process and the Town CLI environment. A port mismatch is refused, not silently "connected". `hermes town start --port PORT` must match that setting. Managed mode uses the profile's token; external token paths and HTTPS ingest setups remain advanced/manual deployments.
+
+Run Town **on the Hermes host**. On a remote host, the printed loopback address is remote too. Use a private SSH forward to view it locally; never expose the unauthenticated live snapshot/SSE routes through a public tunnel. Browser opening is opt-in and explains when no graphical session is available.
+
+### What "connected" means
+
+- **Local setup ready:** `hermes town status` checks the packaged files, Node.js, and private token.
+- **Server ready:** the browser can reach Town. This alone does not prove the plugin is loaded.
+- **Hermes events received:** accepted events arrived during this server run. The UI shows the last-event age. It does not infer current health or task success from silence.
+
+Cron keepers and journal replay do not count as new bridge delivery. Before the first event, expand **Connect Hermes** for setup guidance. The CLI reports the observed process's plugin-loading state as unknown rather than inventing it.
+
+### Contributors: install from this checkout
 
 ```bash
 npm ci
-npm run build
+npm run package:plugin
 npm run install:plugin
-hermes plugins doctor ~/.hermes/plugins/hermes-town --ci
+hermes plugins doctor integrations/hermes-town-plugin --ci
 hermes plugins enable hermes-town
-npm run serve:live
+hermes town start
 ```
 
-Restart the Hermes process you want to observe:
+The installer does not enable anything, edit configuration, or restart Hermes. To select a home, use `node scripts/install-hermes-town-plugin.mjs --hermes-home /path/to/hermes-home`. It leaves catalog-managed plugin bytes untouched. The prebuilt `integrations/hermes-town-plugin/runtime/` directory is part of the reviewed release; `npm run check:package` rejects stale or tampered bundle contents.
 
-```bash
-hermes gateway restart
-# Or start a new Hermes CLI session.
-```
-
-Open `http://127.0.0.1:4187/` and run a real turn. The default page is live mode. Use `?agents=demo` for the scripted demo.
-
-Scheduled jobs do not wait for their first run: the server reads the scheduler's
-`cron/jobs.json` at boot and stands a keeper at its post for every enabled job.
-Only each entry's id and enabled flag are read, never a prompt or schedule. See
-[Scheduled runs](LIVE_BRIDGE.md#scheduled-runs-and-skill-names).
-
-If you installed the plugin from the Hermes catalog with `hermes plugins install hermes-town`, the plugin files are already in place and managed by Hermes. You still need this repository for the server and the bridge token. Run the same commands: the installer recognises a catalog install, leaves it untouched, and only creates the token.
-
-For a non-default profile or Hermes home:
-
-```bash
-node scripts/install-hermes-town-plugin.mjs --hermes-home /path/to/hermes-home
-```
+For manual foreground service deployment, `npm run build && npm run serve:live` remains available. See [the advanced runbook](LIVE_BRIDGE.md#operator-runbook).
 
 ## Privacy model
 
@@ -131,9 +161,11 @@ scripts/        Installation and browser verification
 npm ci
 npm run test:contracts
 npm run build
+npm run test:onboarding
 npx playwright install chromium
 npm run verify:characters
 npm run verify:world
+npm run verify:onboarding
 hermes plugins doctor integrations/hermes-town-plugin --ci
 ```
 

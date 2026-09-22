@@ -29,7 +29,7 @@ src/sim/town.ts → src/scenes/TownScene.ts
 
 - Hermes runs the native plugin in-process. The callbacks receive normal Hermes hook payloads, but the plugin reads only a small allowlist.
 - The plugin sends events only to loopback HTTP or HTTPS. It bypasses environment proxies.
-- The ingest route is the only writer and requires a bearer token.
+- The ingest route is the only event writer and requires a bearer token. Managed process shutdown uses a separate authenticated management route.
 - Snapshot, SSE, and health routes are read-only and unauthenticated. Keep the server bound to loopback.
 - The browser receives no Hermes credential and never connects to a Hermes API, gateway, transcript, session database, or JSONL file.
 
@@ -169,7 +169,21 @@ gives each skill its own market stall, labelled with the skill's name, and a
 skill call sends a runner to that stall. Without the flag, skill calls are
 plain market visits.
 
+## Packaged launcher (v0.3.0)
+
+The catalog package now contains `runtime/server/`, `runtime/dist/`, licenses, and a deterministic SHA-256 manifest. Once that release is catalog-pinned, install and enable it normally, then run `hermes town start`. No npm or build is needed by end users. See [README](README.md#connect-a-local-hermes-runtime) for setup and diagnostics. Release publication and the reviewed catalog pin update are separate steps.
+
+`hermes town setup` validates prerequisites and creates a private profile-local token; `start` also performs setup, authenticates existing process ownership, and starts a background loopback server only when necessary. `status` separates local setup, server reachability/ownership, and first events. `stop` uses a per-process management secret, never a stale PID. `open` is opt-in browser launching. These commands neither edit Hermes configuration nor restart/enable Hermes.
+
+Managed state lives in `$HERMES_HOME/hermes-town/runtime/`: `bridge-token`, `server.json`, `lifecycle.lock`, `town-journal.jsonl`, and bounded `server.log`/`server.log.1`. Each log is capped at 1 MiB. Code stays in the installed plugin directory and is not modified at runtime.
+
+The launcher passes an independent random management secret through the child environment. Only managed servers expose `GET /api/town/manage` and `POST /api/town/manage/stop`; both require that secret. It is never returned by public routes or passed to the browser, and the bridge secret cannot authorize a stop. Manual servers leave these routes disabled unless explicitly configured by an operator.
+
+Health, snapshots, SSE hello/heartbeat, and a dedicated SSE `bridge` update carry `bridge: { receivedEvents, lastEventAt }`. These counters count accepted, nonduplicate ingress events during the current boot only. Cron seeding and journal replay cannot turn "waiting" into "events received". Missing telemetry from an older server remains unknown.
+
 ## Operator runbook
+
+The following is the advanced source-checkout/foreground path. It remains useful for external supervision and custom token/HTTPS configurations; it is not needed for a packaged install.
 
 ### 1. Install the source package
 

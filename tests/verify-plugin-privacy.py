@@ -31,9 +31,13 @@ class Context:
     def __init__(self) -> None:
         self.hooks: dict[str, list] = {}
         self.forbidden: list[str] = []
+        self.cli: list[dict] = []
 
     def register_hook(self, name, callback):
         self.hooks.setdefault(name, []).append(callback)
+
+    def register_cli_command(self, **kwargs):
+        self.cli.append(kwargs)
 
     def __getattr__(self, name):
         if name.startswith("register_") or name.startswith("dispatch_"):
@@ -79,6 +83,8 @@ def main() -> int:
 
         assert set(ctx.hooks) == EXPECTED_HOOKS
         assert not ctx.forbidden
+        assert len(ctx.cli) == 1 and ctx.cli[0]["name"] == "town"
+        assert callable(ctx.cli[0]["setup_fn"]) and callable(ctx.cli[0]["handler_fn"])
         for callbacks in ctx.hooks.values():
             for callback in callbacks:
                 assert any(

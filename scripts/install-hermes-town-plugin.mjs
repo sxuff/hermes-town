@@ -1,190 +1,122 @@
 #!/usr/bin/env node
-// Install the Hermes Town bridge plugin into an active Hermes home.
-//
-// This is the one step that touches anything outside this repository, and it
-// only ever does three things: copy the plugin source, create the bridge token
-// if it is missing, and print the exact commands an operator runs next.
-//
-// It deliberately does NOT enable the plugin, edit config.yaml, restart Hermes,
-// or start the live server. Enabling a plugin that observes every tool call is
-// an operator decision, not an installer's.
-//
-//   node scripts/install-hermes-town-plugin.mjs [--hermes-home PATH] [--force]
-//
-// Idempotent: running it twice copies the same files and leaves an existing
-// token untouched. The token value is never printed.
-
+// Developer fallback only: copy the reviewed payload; never enable/restart Hermes.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-
-const root = path.resolve(import.meta.dirname, '..');
-const source = path.join(root, 'integrations', 'hermes-town-plugin');
-
-/** Exactly the files that make up the plugin. Nothing else is copied. */
-const PLUGIN_FILES = ['plugin.yaml', '__init__.py', 'README.md'];
-
-const PLUGIN_ID = 'hermes-town';
-const TOKEN_BYTES = 32;
+import { ROOT, PLUGIN_FILES, verifyRuntime, walk } from './package-plugin.mjs';
 
 function parseArgs(argv) {
-  const options = { home: null, force: false };
+  const options = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--hermes-home') {
-      options.home = argv[index + 1] ?? null;
-      index += 1;
-    } else if (arg.startsWith('--hermes-home=')) {
-      options.home = arg.slice('--hermes-home='.length);
-    } else if (arg === '--force') {
-      options.force = true;
-    } else if (arg === '--help' || arg === '-h') {
-      options.help = true;
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
+    if (arg === '--hermes-home' || arg.startsWith('--hermes-home=')) {
+      const value = arg === '--hermes-home' ? argv[++index] : arg.slice('--hermes-home='.length);
+      if (!value?.trim() || value.startsWith('-')) throw new Error('--hermes-home needs a non-empty path');
+      options.home = value;
+    } else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (arg === '--force') throw new Error('--force is not supported: existing bridge tokens are always preserved');
+    else throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
 }
-
-function resolveHome(explicit) {
-  const raw = explicit ?? process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes');
-  const resolved = path.resolve(raw.replace(/^~(?=$|\/)/, os.homedir()));
-  if (!fs.existsSync(resolved)) {
-    throw new Error(
-      `Hermes home does not exist: ${resolved}\n`
-      + 'Pass --hermes-home PATH or set HERMES_HOME to the profile you want to install into.',
-    );
-  }
-  if (!fs.statSync(resolved).isDirectory()) {
-    throw new Error(`Hermes home is not a directory: ${resolved}`);
-  }
-  return resolved;
+function exists(file) {
+  try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
-
-/**
- * Copy one file only when its bytes differ, so a re-run is a no-op the
- * filesystem can confirm rather than a claim this script makes.
- */
-function syncFile(from, to) {
-  const next = fs.readFileSync(from);
-  if (fs.existsSync(to)) {
-    const current = fs.readFileSync(to);
-    if (current.equals(next)) return 'unchanged';
-    fs.writeFileSync(to, next, { mode: 0o644 });
-    return 'updated';
+function safePath(file) {
+  for (let current = path.resolve(file); ; current = path.dirname(current)) {
+    if (exists(current)?.isSymbolicLink()) throw new Error(`Symlink forbidden: ${current}`);
+    if (path.dirname(current) === current) break;
   }
-  fs.writeFileSync(to, next, { mode: 0o644 });
-  return 'created';
 }
-
-/**
- * Create the shared secret if it is missing, and verify its permissions if it
- * is not. The value is never returned, printed, or logged.
- */
-function ensureToken(tokenPath, force) {
+function managed(target) {
+  if (exists(path.join(target, '.hermes-catalog.json'))) return true;
+  const metadata = path.join(path.dirname(target), '.install-metadata.json');
+  if (!exists(metadata)) return false;
+  safePath(metadata);
+  const value = JSON.parse(fs.readFileSync(metadata, 'utf8'));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Hermes install metadata; refusing to overwrite');
+  // Preserve every Hermes-managed installation, including exact-SHA git installs.
+  return Object.hasOwn(value, 'hermes-town');
+}
+function payload(source) {
+  safePath(source);
+  for (const file of PLUGIN_FILES) {
+    const stat = exists(path.join(source, file));
+    if (!stat?.isFile() || stat.isSymbolicLink()) throw new Error(`Plugin payload missing/unsafe: ${file}`);
+  }
+  verifyRuntime(path.join(source, 'runtime'));
+  return [...PLUGIN_FILES, ...walk(path.join(source, 'runtime')).map((name) => `runtime/${name}`)];
+}
+function tokenPreflight(tokenPath) {
+  safePath(tokenPath);
+  const stat = exists(tokenPath);
+  if (stat && (!stat.isFile() || stat.nlink !== 1)) throw new Error('Bridge token must be a regular, non-hardlinked file');
+}
+function ensureToken(tokenPath) {
+  tokenPreflight(tokenPath);
   fs.mkdirSync(path.dirname(tokenPath), { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.dirname(tokenPath), 0o700);
+  let fd;
+  let created = false;
   try {
-    fs.chmodSync(path.dirname(tokenPath), 0o700);
-  } catch { /* a pre-existing directory we do not own is reported below */ }
-
-  if (fs.existsSync(tokenPath) && !force) {
-    const info = fs.statSync(tokenPath);
-    if (!info.isFile()) throw new Error(`Bridge token path is not a regular file: ${tokenPath}`);
-    if (info.mode & 0o077) {
-      fs.chmodSync(tokenPath, 0o600);
-      return 'tightened';
+    try {
+      fd = fs.openSync(tokenPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+      created = true;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      fd = fs.openSync(tokenPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     }
-    return 'kept';
-  }
-  // base64url of 32 random bytes: 43 characters, ~258 bits under the server's
-  // conservative estimator, and safe in an HTTP header without quoting.
-  const token = crypto.randomBytes(TOKEN_BYTES).toString('base64url');
-  fs.writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
-  fs.chmodSync(tokenPath, 0o600);
-  return force ? 'rotated' : 'created';
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('Unsafe bridge token');
+    fs.fchmodSync(fd, 0o600);
+    if (created) fs.writeFileSync(fd, `${crypto.randomBytes(32).toString('base64url')}\n`);
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+  return created ? 'created' : 'kept';
 }
-
 function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log([
-      'Usage: node scripts/install-hermes-town-plugin.mjs [options]',
-      '',
-      '  --hermes-home PATH  Hermes home to install into.',
-      '                      Defaults to $HERMES_HOME, then ~/.hermes.',
-      '  --force             Rotate the bridge token instead of keeping it.',
-      '',
-      'Copies the plugin source and ensures the bridge token exists.',
-      'Does not enable the plugin, edit config.yaml, or restart Hermes.',
-    ].join('\n'));
+    console.log('Developer fallback: node scripts/install-hermes-town-plugin.mjs [--hermes-home PATH]\nCopies the prebuilt plugin. Never enables, edits config, restarts, downloads, or rotates tokens.');
     return;
   }
-
-  for (const file of PLUGIN_FILES) {
-    const from = path.join(source, file);
-    if (!fs.existsSync(from)) throw new Error(`Plugin source file is missing: ${from}`);
+  const rawHome = options.home ?? process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes');
+  if (!rawHome.trim()) throw new Error('Hermes home must not be empty');
+  const home = path.resolve(rawHome.replace(/^~(?=$|\/)/, os.homedir()));
+  safePath(home);
+  if (!exists(home)?.isDirectory()) throw new Error(`Hermes home does not exist or is not a directory: ${home}`);
+  const target = path.join(home, 'plugins/hermes-town');
+  safePath(target);
+  const catalogManaged = managed(target);
+  const source = catalogManaged ? target : path.join(ROOT, 'integrations/hermes-town-plugin');
+  const files = payload(source); // Verify complete bundle BEFORE any target/token write.
+  const token = path.join(home, 'hermes-town/runtime/bridge-token');
+  tokenPreflight(token);
+  if (!catalogManaged) {
+    // Validate all existing destinations before copying even one file.
+    for (const file of files) {
+      const destination = path.join(target, file);
+      safePath(destination);
+      const stat = exists(destination);
+      if (stat && (!stat.isFile() || stat.nlink !== 1)) throw new Error(`Unsafe destination: ${file}`);
+    }
+    // Replace only the generated runtime, to remove obsolete hashed assets.
+    const runtime = path.join(target, 'runtime');
+    if (exists(runtime)) walk(runtime);
+    fs.rmSync(runtime, { recursive: true, force: true });
+    for (const file of files) {
+      const destination = path.join(target, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o755 });
+      const bytes = fs.readFileSync(path.join(source, file));
+      if (!exists(destination) || !fs.readFileSync(destination).equals(bytes)) fs.writeFileSync(destination, bytes, { mode: 0o644 });
+    }
+    payload(target);
   }
-
-  const home = resolveHome(options.home);
-  const target = path.join(home, 'plugins', PLUGIN_ID);
-  fs.mkdirSync(target, { recursive: true, mode: 0o755 });
-
-  // A directory Hermes installed from its plugin catalog carries a provenance
-  // sidecar and is pinned to a reviewed commit. Overwriting it would move the
-  // code off that pin behind Hermes' back, so leave it alone and only make
-  // sure the token exists.
-  const catalogManaged = fs.existsSync(path.join(target, '.hermes-catalog.json'));
-  const copied = catalogManaged
-    ? PLUGIN_FILES.map((file) => ({ file, outcome: 'catalog-managed, left untouched' }))
-    : PLUGIN_FILES.map((file) => ({
-      file,
-      outcome: syncFile(path.join(source, file), path.join(target, file)),
-    }));
-
-  const tokenPath = path.join(home, 'hermes-town', 'runtime', 'bridge-token');
-  const tokenOutcome = ensureToken(tokenPath, options.force);
-
-  console.log(catalogManaged
-    ? 'Hermes Town bridge plugin is installed from the Hermes catalog; token checked.'
-    : 'Hermes Town bridge plugin installed.');
-  console.log('');
-  console.log(`  hermes home    ${home}`);
-  console.log(`  plugin         ${target}`);
-  for (const entry of copied) console.log(`                 ${entry.file} (${entry.outcome})`);
-  console.log(`  bridge token   ${tokenPath} (${tokenOutcome}, mode 0600, value not printed)`);
-  console.log('');
-  console.log('Next, as the operator:');
-  console.log('');
-  console.log('  1. Validate the plugin against the real loader:');
-  console.log(`       hermes plugins doctor ${target} --ci`);
-  console.log('');
-  console.log('  2. Enable it (opt-in; this is the step that starts observation):');
-  console.log(`       hermes plugins enable ${PLUGIN_ID} --no-allow-tool-override`);
-  console.log('       hermes plugins list');
-  console.log('');
-  console.log('  3. Start the Town live server on the same host, in this repository:');
-  console.log('       npm run build');
-  console.log('       npm run serve:live');
-  console.log('');
-  console.log('  4. Restart whatever Hermes surface will be observed, so the newly');
-  console.log('     enabled plugin is loaded into that process:');
-  console.log('       hermes gateway restart          # gateway');
-  console.log('       # or simply start a new `hermes` CLI session');
-  console.log('');
-  console.log('  5. Open the live town:');
-  console.log('       http://127.0.0.1:4187/');
-  console.log('');
-  console.log('To remove it again:');
-  console.log(`       hermes plugins disable ${PLUGIN_ID}`);
-  console.log(`       rm -rf ${target}`);
-  console.log(`       rm -f  ${tokenPath}`);
+  const outcome = ensureToken(token);
+  console.log(catalogManaged ? 'Hermes-managed plugin left untouched; bundled runtime verified.' : 'Prebuilt Hermes Town plugin installed (developer fallback).');
+  console.log(`Bridge token ${outcome}, mode 0600; value not printed.`);
+  console.log('No configuration changed; no plugin enabled; no process started or restarted.');
+  console.log('\nNext, as the operator:\n  hermes plugins enable hermes-town\n  hermes town start\n  hermes town status');
+  console.log('Start a new Hermes CLI session or explicitly restart the surface you want to observe.');
 }
-
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-}
+try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; }

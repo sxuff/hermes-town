@@ -91,4 +91,6 @@ export interface Source {
   now(): number;
   /** Residents the last full snapshot deliberately left out, by reason. */
   omitted?(): { departed: number; stale: number };
+  /** Accepted ingress this server boot, never inferred from residents or replay. */
+  bridge?(): { receivedEvents: number; lastEventAt: number | null } | null;
 }

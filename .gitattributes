@@ -1,0 +1,14 @@
+# Packaged file digests must survive Windows checkouts unchanged.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.ogg binary
+*.mp3 binary
+*.wav binary

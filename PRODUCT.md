@@ -44,7 +44,7 @@ Simulated social chatter, public live hosting, an economy, multiplayer, combat, 
 
 ## Next milestones
 
-1. One-package Hermes installation with explicit setup, start, status, and stop commands.
+1. Publish the packaged v0.3.0 release and submit its catalog pin for review. The bundled runtime and explicit `hermes town setup/start/status/stop/open` path are implemented; publication is separate.
 2. Optional Hermes Desktop page or launcher after the local server lifecycle is packaged.
 3. Waiting-for-user state with an explicit, privacy-safe lifecycle signal.
 4. Day history and stable session-to-home continuity across restarts.

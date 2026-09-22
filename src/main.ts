@@ -133,16 +133,31 @@ function renderStatus(): void {
   if (mode === 'demo') {
     text = `scripted demo · ${mains} simulated sessions · ${active.length - mains} simulated helpers · ${runners} tool calls out · ${waiting} waiting for you` + (resting ? ` · ${resting} resting` : '');
   } else {
-    text = `live Hermes events · ${st}`;
+    const bridge = source.bridge?.();
+    text = st === 'connected'
+      ? bridge === null || bridge === undefined ? 'server reachable · bridge status unknown'
+        : bridge.receivedEvents === 0 ? 'server ready · waiting for first Hermes event'
+        : `Hermes events received · last event ${ago(Math.max(0, source.now() - (bridge.lastEventAt ?? source.now())))} ago`
+      : `live Hermes events · ${st}`;
     if (st === 'connected') {
-      text += ` · ${mains} sessions · ${active.length - mains} helpers · ${working} working · ${runners} tool calls out · ${waiting} waiting for you` + (keepers ? ` · ${keepers} keepers on watch` : '') + (resting ? ` · ${resting} resting` : '') + (remembered ? ` · ${remembered} from earlier today` : '');
+      if ((bridge?.receivedEvents ?? 0) > 0) {
+        text += ` · ${mains} sessions · ${active.length - mains} helpers · ${working} working · ${runners} tool calls out · ${waiting} waiting for you` + (keepers ? ` · ${keepers} ${keepers === 1 ? 'keeper' : 'keepers'} on watch` : '') + (resting ? ` · ${resting} resting` : '') + (remembered ? ` · ${remembered} from earlier today` : '');
+      } else if (keepers) {
+        text += ` · ${keepers} scheduled ${keepers === 1 ? 'keeper' : 'keepers'} (not new delivery)`;
+      }
       const o = source.omitted?.();
       if (o && o.stale + o.departed > 0) text += ` · ${o.stale + o.departed} past sessions not shown`;
     }
-    if (st === 'disconnected') text += ' · start the live server or open ?agents=demo';
+    if (st === 'disconnected') text += ' · run hermes town start on the Hermes host';
   }
   statusEl.textContent = text;
-  statusEl.className = `status ${mode === 'demo' ? 'demo' : st === 'connected' ? 'ok' : st === 'disconnected' ? 'bad' : ''}`;
+  const verified = (source.bridge?.()?.receivedEvents ?? 0) > 0;
+  statusEl.className = `status ${mode === 'demo' ? 'demo' : st === 'connected' && verified ? 'ok' : st === 'disconnected' ? 'bad' : ''}`;
+  const help = $<HTMLDetailsElement>('#connection-help');
+  help.hidden = mode === 'demo' || (st === 'connected' && verified);
+  $('#connection-note').textContent = st === 'connected'
+    ? 'Your browser can reach Town. That alone does not prove the Hermes plugin is loaded or sending events. Scheduled keepers and restored sessions do not count as new delivery.'
+    : 'Town cannot reach its local server. Existing residents are not evidence of current activity.';
 }
 
 // ------------------------------------------------------------- minimap

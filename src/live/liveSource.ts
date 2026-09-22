@@ -26,6 +26,15 @@ export function createLiveSource(sink: EventSink): Source {
   let pollTimer: number | null = null;
   let polling = false;
   let omitted = { departed: 0, stale: 0 };
+  let bridge: { receivedEvents: number; lastEventAt: number | null } | null = null;
+  const readBridge = (value: unknown): void => {
+    if (!value || typeof value !== 'object') { bridge = null; return; }
+    const b = value as Record<string, unknown>;
+    if (typeof b.receivedEvents === 'number' && Number.isSafeInteger(b.receivedEvents) && b.receivedEvents >= 0
+      && (b.lastEventAt === null || (typeof b.lastEventAt === 'number' && Number.isFinite(b.lastEventAt)))) {
+      bridge = { receivedEvents: b.receivedEvents, lastEventAt: b.lastEventAt };
+    } else bridge = null;
+  };
 
   const absorb = (payload: unknown): void => {
     if (typeof payload !== 'object' || payload === null) return;
@@ -54,6 +63,7 @@ export function createLiveSource(sink: EventSink): Source {
       if (!res.ok) throw new Error(String(res.status));
       const body = (await res.json()) as Record<string, unknown>;
       adoptStream(body.streamId);
+      readBridge(body.bridge);
       if (typeof body.at === 'number') offset = body.at - Date.now() / 1000;
       const events = Array.isArray(body.events) ? body.events : [];
       for (const e of events) absorb(e);
@@ -101,12 +111,20 @@ export function createLiveSource(sink: EventSink): Source {
     const src = new EventSource(`${STREAM_PATH}?since=${cursor}`);
     stream = src;
     src.addEventListener('open', () => { if (disconnectTimer !== null) { window.clearTimeout(disconnectTimer); disconnectTimer = null; } status = 'connected'; lastFrameAt = Date.now(); startPollWatch(); });
-    src.addEventListener('heartbeat', () => { lastFrameAt = Date.now(); });
+    src.addEventListener('heartbeat', (e) => {
+      lastFrameAt = Date.now();
+      try { readBridge(JSON.parse((e as MessageEvent).data).bridge); } catch { bridge = null; }
+    });
+    src.addEventListener('bridge', (e) => {
+      lastFrameAt = Date.now();
+      try { readBridge(JSON.parse((e as MessageEvent).data)); } catch { bridge = null; }
+    });
     src.addEventListener('hello', (e) => {
       try {
         const body = JSON.parse((e as MessageEvent).data) as Record<string, unknown>;
         const before = streamId;
         adoptStream(body.streamId);
+        readBridge(body.bridge);
         if (typeof body.at === 'number') offset = body.at - Date.now() / 1000;
         if (before !== null && streamId !== before) { src.close(); void boot(); }
       } catch { /* ignore */ }
@@ -146,5 +164,6 @@ export function createLiveSource(sink: EventSink): Source {
     status: () => status,
     now: () => Date.now() / 1000 + offset,
     omitted: () => omitted,
+    bridge: () => bridge,
   };
 }
