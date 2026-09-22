@@ -4,9 +4,9 @@ import { paintTerrain } from '../art/terrain';
 import { paintStructures } from '../art/structures';
 import { PROP_ANCHORS, TREE_ANCHORS } from '../world/dressing';
 import {
-  CHARACTER_SCALE, FACINGS, FRAME_COUNT, FRAME_H, FRAME_W, SIT_FRAME, WORK_STYLES, lookFor, paintCharacterSheet, paintEmote,
-  walkFrame, workFrame,
+  CHARACTER_BASELINE, CHARACTER_SCALE, FRAME_COUNT, FRAME_H, FRAME_W, idleFrame, lookFor, paintCharacterSheet, paintEmote,
 } from '../art/characters';
+import { residentPose } from './residentAnimation';
 import { hashString } from '../art/painter';
 import { T, TILE, paintGlow, paintShadow, paintSpark } from '../art/tiles';
 import type { Resident, TownSim } from '../sim/town';
@@ -23,7 +23,7 @@ interface ResidentView {
   bubbleBg: Phaser.GameObjects.Rectangle;
   emote: Phaser.GameObjects.Image;
   key: string;
-  lastAnim: string;
+  striking: boolean;
 }
 
 interface BuildingView {
@@ -410,7 +410,7 @@ export class TownScene extends Phaser.Scene {
         continue;
       }
       if (!v.sprite.visible) { v.sprite.setVisible(true); v.shadow.setVisible(true); }
-      this.syncView(v, r, dt);
+      this.syncView(v, r);
       // name tags are a budget: past a crowd, or zoomed out, only the selected one keeps its tag
       v.name.setVisible(this.selected === r.id || (zoom >= 2 && crowd <= 80 && !(r.kind === 'runner' && zoom < 3)));
     }
@@ -508,26 +508,19 @@ export class TownScene extends Phaser.Scene {
     const key = `char-${bucket}`;
     if (!this.textures.exists(key)) {
       this.textures.addSpriteSheet(key, paintCharacterSheet(lookFor(bucket, r.role)) as unknown as HTMLImageElement, { frameWidth: FRAME_W * CHARACTER_SCALE, frameHeight: FRAME_H * CHARACTER_SCALE, endFrame: FRAME_COUNT - 1 });
-      for (const f of FACINGS) {
-        this.anims.create({ key: `${key}-walk-${f}`, frames: [0, 1, 2, 3].map((i) => ({ key, frame: walkFrame(f, i) })), frameRate: 8, repeat: -1 });
-      }
-      for (const style of WORK_STYLES) for (const f of ['left', 'down', 'up'] as const) {
-        const rate = style === 'hammer' || style === 'bellows' ? 3 : style === 'read' ? 1.2 : 2;
-        this.anims.create({ key: `${key}-work-${style}-${f}`, frames: [0, 1].map((i) => ({ key, frame: workFrame(style, f, i) })), frameRate: rate, repeat: -1 });
-      }
     }
-    const sprite = this.add.sprite(r.x, r.y, key, walkFrame('down', 0)).setOrigin(0.5, 0.95).setScale((r.kind === 'runner' ? 0.8 : 1) / CHARACTER_SCALE);
+    const sprite = this.add.sprite(r.x, r.y, key, idleFrame('down', 0)).setOrigin(0.5, CHARACTER_BASELINE / FRAME_H).setScale((r.kind === 'runner' ? 0.8 : 1) / CHARACTER_SCALE);
     const shadow = this.add.image(r.x, r.y, 'shadow-char').setOrigin(0.5, 0.5);
     const name = this.add.text(r.x, r.y + 3, r.name, { fontFamily: 'monospace', fontSize: '5px', color: '#f3e6c9' }).setOrigin(0.5, 0).setResolution(6);
     const bubble = this.add.text(r.x, r.y - 30, '', { fontFamily: 'monospace', fontSize: '6px', color: '#1a1418' }).setOrigin(0.5, 1).setResolution(6);
     const bubbleBg = this.add.rectangle(r.x, r.y - 30, 10, 8, 0xf7f1e3).setOrigin(0.5, 1).setStrokeStyle(0.5, 0x2b2027);
     const emote = this.add.image(r.x + 9, r.y - 30, 'emote-ok').setOrigin(0.5, 1).setVisible(false);
-    const v: ResidentView = { sprite, shadow, name, bubble, bubbleBg, emote, key, lastAnim: '' };
+    const v: ResidentView = { sprite, shadow, name, bubble, bubbleBg, emote, key, striking: false };
     this.views.set(r.id, v);
     return v;
   }
 
-  private syncView(v: ResidentView, r: Resident, dt: number): void {
+  private syncView(v: ResidentView, r: Resident): void {
     const x = Math.round(r.x), y = Math.round(r.y + 7);
     v.sprite.setPosition(x, y).setDepth(y);
     v.shadow.setPosition(x, y - 1).setDepth(y - 1);
@@ -539,25 +532,11 @@ export class TownScene extends Phaser.Scene {
     const selected = this.selected === r.id;
     v.name.setColor(selected ? '#ffd36b' : r.kind === 'runner' ? '#a9c4d6' : r.role === 'scheduled' ? '#9fd0e0' : r.isChild ? '#c9b58f' : r.memory ? '#8f8677' : '#f3e6c9');
 
-    let animKey: string;
-    let flip = false;
-    if (r.anim === 'walk') animKey = `${v.key}-walk-${r.facing}`;
-    else if (r.anim === 'work') {
-      const o = r.facing === 'down' ? 'down' : r.facing === 'up' ? 'up' : 'left';
-      flip = r.facing === 'right';
-      animKey = `${v.key}-work-${r.style}-${o}`;
-    } else animKey = `${r.anim}-${r.facing}`;
-    if (animKey !== v.lastAnim) {
-      v.lastAnim = animKey;
-      if (r.anim === 'walk' || r.anim === 'work') v.sprite.play(animKey);
-      else if (r.anim === 'sit') { v.sprite.stop(); v.sprite.setFrame(SIT_FRAME); }
-      else { v.sprite.stop(); v.sprite.setFrame(walkFrame(r.facing, 0)); }
-    }
-    v.sprite.setFlipX(flip);
-    if (r.anim === 'work' && r.station && (r.style === 'hammer' || r.style === 'bellows')) {
-      const frame = v.sprite.anims.currentFrame?.index ?? 1;
-      if (frame === 2 && Math.random() < dt * 12) this.sparks.emitParticleAt(r.station.prop.x + 8, r.station.prop.y + 2, 3);
-    }
+    const pose = residentPose(r, this.opts.sim.now());
+    if (Number(v.sprite.frame.name) !== pose.frame) v.sprite.setFrame(pose.frame);
+    v.sprite.setFlipX(pose.flipX);
+    if (pose.striking && !v.striking && r.station) this.sparks.emitParticleAt(r.station.prop.x + 8, r.station.prop.y + 2, 3);
+    v.striking = pose.striking;
     const text = r.bubble && r.fade > 0.9 && r.state !== 'resting' ? r.bubble : '';
     if (v.bubble.text !== text) v.bubble.setText(text);
     const show = text.length > 0;

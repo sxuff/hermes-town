@@ -5,6 +5,7 @@ import type { TownEvent } from '../live/events';
 import { tileCenter, type Building, type Station, type TownMap } from '../world/map';
 import { findPath, nearestWalkable, type Point } from '../world/pathfind';
 import { IDLE_TARGET, THINK_TARGET, targetForTool, type Place, type ToolTarget } from './toolMap';
+import { REACTION_DURATION } from '../art/characters';
 
 /**
  * The town model, crew edition.
@@ -34,6 +35,8 @@ const MEMORY_SECONDS = 6 * 60 * 60;
 /** A resident waiting at its door for this long goes to sit on the porch. */
 const IDLE_HOME_SECONDS = 10 * 60;
 const HISTORY_LIMIT = 14;
+/** A short stop, then turn toward the workstation before using it. */
+export const STATION_SETTLE_SECONDS = 0.36;
 
 export type ResidentState =
   | 'arriving' | 'moving' | 'working' | 'idle' | 'celebrating' | 'failed'
@@ -98,6 +101,16 @@ export interface Resident {
   clock: number;
   seq: number;
   runnerCount: number;
+  /** Actual path distance, not wall time: locomotion poses cannot run in place. */
+  walkDistance: number;
+  settleUntil: number;
+  settleFacing: Facing | null;
+  settledAnim: Anim;
+  workStartedAt: number;
+  /** Presentation only. Set by observed completion/failure, never inactivity. */
+  reaction: 'complete' | 'fail' | null;
+  reactionAt: number;
+  reactionUntil: number;
 }
 
 export interface SimEvent { at: number; text: string; residentId: string }
@@ -259,6 +272,7 @@ export class TownSim {
       case 'agent.spawned':
         break;
       case 'agent.assigned':
+        r.reaction = null;
         // a turn begins: think at the hall
         if (r.place !== 'hall' && !(r.intent && r.intent.target.place === 'hall' && r.state === 'moving')) {
           r.queue.length = 0;
@@ -269,6 +283,7 @@ export class TownSim {
         this.note(r, e.action ?? 'turn started');
         break;
       case 'agent.tool_started': {
+        r.reaction = null;
         const tool = e.tool ?? 'tool';
         this.dispatch(r, tool, e.detail ?? null);
         this.note(r, e.detail ? `${tool} · ${e.detail}` : tool);
@@ -285,6 +300,7 @@ export class TownSim {
         for (const runner of this.runnersOf(r)) runner.done = true;
         r.queue.length = 0;
         this.setEmote(r, 'ok', CELEBRATE_SECONDS);
+        this.react(r, 'complete');
         this.board.unshift({ at: this.time, name: r.name, text: e.action ?? 'turn completed' });
         if (this.board.length > 12) this.board.length = 12;
         this.enqueue(r, { target: { place: 'hall', style: 'desk', verb: 'pinning' }, tool: null, tile: this.boardTile });
@@ -297,6 +313,7 @@ export class TownSim {
           // a tool failed: that runner comes back with smoke
           runner.done = true;
           runner.failed = true;
+          this.react(runner, 'fail');
           this.note(r, `${runner.name} failed`);
         } else {
           for (const x of this.runnersOf(r)) x.done = true;
@@ -305,6 +322,7 @@ export class TownSim {
           if (r.state === 'failed') { r.hold = FAIL_SECONDS; r.anim = 'stand'; }
           r.bubble = null;
           this.setEmote(r, 'fail', FAIL_SECONDS);
+          this.react(r, 'fail');
           this.note(r, e.reason ?? 'failed');
         }
         break;
@@ -331,7 +349,9 @@ export class TownSim {
       x: pos.x, y: pos.y, facing: 'up', anim: 'stand', style: 'desk', state: 'arriving',
       porch: null, place: null, station: null, intent: null, queue: [], path: [], pathIndex: 0,
       hold: 0, quiet: 0, done: false, failed: false, bubble: null, emote: null, emoteUntil: 0,
-      history: [], lastEventAt: this.time, spawnedAt: this.time, fade: 1, clock: Math.random() * 10, seq: 0, runnerCount: 0,
+      history: [], lastEventAt: this.time, spawnedAt: this.time, fade: 1, clock: (hashString(id) % 60000) / 1000, seq: 0, runnerCount: 0,
+      walkDistance: 0, settleUntil: 0, settleFacing: null, settledAnim: 'stand', workStartedAt: this.time,
+      reaction: null, reactionAt: 0, reactionUntil: 0,
     };
   }
 
@@ -404,6 +424,14 @@ export class TownSim {
     r.emoteUntil = this.time + seconds;
   }
 
+  private react(r: Resident, reaction: 'complete' | 'fail'): void {
+    r.settleUntil = 0;
+    r.settleFacing = null;
+    r.reaction = reaction;
+    r.reactionAt = this.time;
+    r.reactionUntil = this.time + REACTION_DURATION;
+  }
+
   private enqueue(r: Resident, intent: Intent): void {
     const cur = r.intent;
     if (cur && !intent.tile && cur.target.place === intent.target.place && (r.state === 'working' || r.state === 'moving') && r.queue.length === 0) {
@@ -455,6 +483,8 @@ export class TownSim {
   }
 
   private walkTo(r: Resident, target: Point): void {
+    r.settleUntil = 0;
+    r.settleFacing = null;
     const from = nearestWalkable(this.map.grid, { x: Math.floor(r.x / TILE), y: Math.floor(r.y / TILE) }) ?? this.map.entrance;
     const to = nearestWalkable(this.map.grid, target) ?? target;
     r.path = findPath(this.map.grid, from, to) ?? [from, to];
@@ -479,6 +509,8 @@ export class TownSim {
   }
 
   private wake(r: Resident): void {
+    r.settleUntil = 0;
+    r.settleFacing = null;
     if (r.porch) { this.porches.delete(`${r.porch.x},${r.porch.y}`); r.porch = null; }
     r.state = 'idle';
     r.anim = 'stand';
@@ -567,9 +599,8 @@ export class TownSim {
       }
       if (intent.target.verb === 'pinning') {
         r.state = 'pinning';
-        r.anim = 'work';
         r.style = 'desk';
-        r.facing = 'up';
+        this.settleForWork(r, 'work', 'up');
         r.hold = PIN_SECONDS;
         r.bubble = 'done';
         return;
@@ -587,12 +618,20 @@ export class TownSim {
     r.place = intent.target.place;
     r.style = intent.target.style;
     r.state = 'working';
-    r.facing = r.station ? r.station.facing : 'down';
-    r.anim = intent.target.style === 'sit' ? 'sit' : r.station ? 'work' : 'stand';
-    if (r.station && r.station.prop.kind === 'barrel') r.anim = 'stand';
+    let nextAnim: Anim = intent.target.style === 'sit' ? 'sit' : r.station ? 'work' : 'stand';
+    if (r.station && r.station.prop.kind === 'barrel') nextAnim = 'stand';
+    this.settleForWork(r, nextAnim, r.station ? r.station.facing : 'down');
     r.hold = r.kind === 'runner' ? RUNNER_WORK_SECONDS : 0;
     r.bubble = bubbleFor(intent);
     if (intent.target.verb === 'idle') { r.bubble = null; r.state = 'idle'; }
+  }
+
+  private settleForWork(r: Resident, nextAnim: Anim, facing: Facing): void {
+    r.settledAnim = nextAnim;
+    r.settleFacing = facing;
+    r.settleUntil = this.time + STATION_SETTLE_SECONDS;
+    r.workStartedAt = r.settleUntil;
+    r.anim = 'stand';
   }
 
   update(dt: number): void {
@@ -600,6 +639,18 @@ export class TownSim {
     for (const r of this.residents.values()) {
       r.clock += dt;
       if (r.emote && this.time > r.emoteUntil) r.emote = null;
+      // Reactions are finite gestures; a new assignment can interrupt them.
+      // The lifecycle record changes on receipt, not when a gesture ends.
+      if (r.reaction) {
+        if (this.time < r.reactionUntil) continue;
+        r.reaction = null;
+      }
+      if (r.settleFacing !== null) {
+        if (this.time >= r.settleUntil - STATION_SETTLE_SECONDS / 2) r.facing = r.settleFacing;
+        if (this.time < r.settleUntil) continue;
+        r.anim = r.settledAnim;
+        r.settleFacing = null;
+      }
       if (r.kind === 'runner') { this.updateRunner(r, dt); continue; }
       // waited at the door long enough: sit down on the porch (keepers go back on watch instead)
       if ((r.state === 'waiting' || r.state === 'idle' || r.state === 'working' || r.state === 'celebrating' || r.state === 'failed' || r.state === 'arriving')
@@ -736,9 +787,9 @@ export class TownSim {
       const dx = c.x - r.x, dy = c.y - r.y;
       const d = Math.hypot(dx, dy);
       if (d <= budget) {
-        r.x = c.x; r.y = c.y; r.pathIndex += 1; budget -= d;
+        r.x = c.x; r.y = c.y; r.pathIndex += 1; budget -= d; r.walkDistance += d;
       } else {
-        r.x += (dx / d) * budget; r.y += (dy / d) * budget; budget = 0;
+        r.x += (dx / d) * budget; r.y += (dy / d) * budget; r.walkDistance += budget; budget = 0;
       }
       r.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : dy > 0 ? 'down' : 'up';
     }

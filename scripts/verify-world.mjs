@@ -105,12 +105,15 @@ try {
     const art = await import('/src/art/characters.ts');
     const source = art.paintCharacterSheet(art.lookFor('world-review', 'fabrication'));
     const canvas = document.createElement('canvas');
-    canvas.id = 'pose-review'; canvas.width = 800; canvas.height = 700;
+    const columns = 14, cellW = 80, cellH = 100;
+    canvas.id = 'pose-review'; canvas.width = columns * cellW; canvas.height = Math.ceil(art.FRAME_COUNT / columns) * cellH;
     canvas.style.cssText = 'position:fixed;inset:20px auto auto 20px;z-index:9999;background:#66705c';
     const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = false;
     for (let i = 0; i < art.FRAME_COUNT; i++) {
-      const x = i % 10 * 80, y = Math.floor(i / 10) * 100;
-      ctx.drawImage(source, i * 40, 0, 40, 60, x + 10, y + 3, 60, 90);
+      const x = i % columns * cellW, y = Math.floor(i / columns) * cellH;
+      const fw = art.FRAME_W * art.CHARACTER_SCALE, fh = art.FRAME_H * art.CHARACTER_SCALE;
+      const zoom = Math.min(64 / art.FRAME_W, 84 / art.FRAME_H);
+      ctx.drawImage(source, (i % art.FRAME_COLUMNS) * fw, Math.floor(i / art.FRAME_COLUMNS) * fh, fw, fh, x + 8, y + 3, art.FRAME_W * zoom, art.FRAME_H * zoom);
       ctx.fillStyle = '#eee7d5'; ctx.font = '9px monospace'; ctx.fillText(String(i), x + 4, y + 98);
     }
     document.body.appendChild(canvas);

@@ -2,37 +2,82 @@ import { CLOTH, HAIR, PAL } from './palette';
 import { Painter, hashString, mulberry, outline, shade } from './painter';
 
 /**
- * Resident sprites, drawn to the concept sheet: a big head under a wide brim,
- * two dot eyes and nothing else on the face, a tunic with a satchel strap and
- * a buckled belt, dark trousers, brown boots, and both arms always visible.
- * Flat two-tone shading, one dark outline, no anti-aliasing anywhere.
- *
- * Frames are 20×30 texels, painted on that grid and blitted at 2× so they
- * share the world's texel density. Layout (frame index):
- *   0..15   walk, 4 facings × 4 frames (contact, pass, contact, pass)
- *   16      sit (facing down)
- *   17..    work: for each style, 3 orientations (side, down, up) × 2 frames
- * "side" is drawn facing left; the renderer flips it for right.
+ * Original 20×30 resident, NOT enlarged to fill its cell. Six pixels of
+ * horizontal gutter and five above the body leave room for tools and ink.
+ * Native texels, row-major grid; scene scale is independent of atlas scale.
+ * Side work is authored left and mirrored by the renderer for right.
  */
-export const FRAME_W = 20;
-export const FRAME_H = 30;
-export const CHARACTER_SCALE = 2;
+export const FRAME_W = 32;
+export const FRAME_H = 40;
+export const CHARACTER_SCALE = 1;
+export const FRAME_COLUMNS = 16;
+/** Bottom edge of the grounded boot outline, measured from the cell top. */
+export const CHARACTER_BASELINE = 35;
+export const WALK_FRAME_COUNT = 8;
+export const IDLE_FRAME_COUNT = 4;
+export const WORK_FRAME_COUNT = 4;
+export const REACTION_FRAME_COUNT = 4;
+export const REACTION_DURATION = 1.2;
 
 export type Facing = 'down' | 'left' | 'right' | 'up';
 export const FACINGS: readonly Facing[] = ['down', 'left', 'right', 'up'];
-
 export type WorkStyle = 'hammer' | 'read' | 'bellows' | 'parcel' | 'gaze' | 'desk' | 'sit' | 'haggle';
 export const WORK_STYLES: readonly WorkStyle[] = ['hammer', 'read', 'bellows', 'parcel', 'gaze', 'desk', 'sit', 'haggle'];
 type Orient = 'side' | 'down' | 'up';
 const ORIENTS: readonly Orient[] = ['side', 'down', 'up'];
+type Reaction = 'complete' | 'fail';
+const REACTIONS: readonly Reaction[] = ['complete', 'fail'];
+const IDLE_START = FACINGS.length * WALK_FRAME_COUNT;
+const WORK_START = IDLE_START + FACINGS.length * IDLE_FRAME_COUNT;
+const REACTION_START = WORK_START + WORK_STYLES.length * ORIENTS.length * WORK_FRAME_COUNT;
+export const FRAME_COUNT = REACTION_START + REACTIONS.length * FACINGS.length * REACTION_FRAME_COUNT;
 
-export function walkFrame(facing: Facing, i: number): number { return FACINGS.indexOf(facing) * 4 + (i % 4); }
-export const SIT_FRAME = 16;
-export function workFrame(style: WorkStyle, facing: Facing, i: number): number {
-  const orient: Orient = facing === 'down' ? 'down' : facing === 'up' ? 'up' : 'side';
-  return 17 + (WORK_STYLES.indexOf(style) * 3 + ORIENTS.indexOf(orient)) * 2 + (i % 2);
+function wrap(index: number, count: number): number {
+  return Number.isFinite(index) ? ((Math.floor(index) % count) + count) % count : 0;
 }
-export const FRAME_COUNT = 17 + WORK_STYLES.length * 3 * 2;
+export function walkFrame(facing: Facing, index: number): number {
+  return FACINGS.indexOf(facing) * WALK_FRAME_COUNT + wrap(index, WALK_FRAME_COUNT);
+}
+export function idleFrame(facing: Facing, index: number): number {
+  return IDLE_START + FACINGS.indexOf(facing) * IDLE_FRAME_COUNT + wrap(index, IDLE_FRAME_COUNT);
+}
+export function workFrame(style: WorkStyle, facing: Facing, index: number): number {
+  const orient: Orient = facing === 'down' ? 'down' : facing === 'up' ? 'up' : 'side';
+  return WORK_START + (WORK_STYLES.indexOf(style) * ORIENTS.length + ORIENTS.indexOf(orient)) * WORK_FRAME_COUNT + wrap(index, WORK_FRAME_COUNT);
+}
+export function sitFrame(facing: Facing, index: number): number { return workFrame('sit', facing, index); }
+export const SIT_FRAME = sitFrame('down', 0);
+export function reactionFrame(kind: Reaction, facing: Facing, index: number): number {
+  return REACTION_START + (REACTIONS.indexOf(kind) * FACINGS.length + FACINGS.indexOf(facing)) * REACTION_FRAME_COUNT + wrap(index, REACTION_FRAME_COUNT);
+}
+
+// Seconds per authored pose. Hammer: prepare, anticipate, impact, recover.
+// Idle holds neutral; the blink is short, and never raises/lowers the feet.
+export const IDLE_DURATIONS: readonly number[] = [2.8, 0.65, 0.12, 0.65];
+export const WORK_DURATIONS: Readonly<Record<WorkStyle, readonly number[]>> = {
+  hammer: [0.28, 0.24, 0.12, 0.36],
+  read: [0.9, 0.35, 0.24, 0.65],
+  bellows: [0.4, 0.25, 0.38, 0.32],
+  parcel: [0.45, 0.3, 0.4, 0.45],
+  gaze: [0.7, 0.35, 0.55, 0.5],
+  desk: [0.3, 0.24, 0.3, 0.55],
+  sit: [2.4, 0.7, 0.12, 0.7],
+  haggle: [0.55, 0.3, 0.5, 0.45],
+};
+export const REACTION_DURATIONS: readonly number[] = [0.15, 0.25, 0.45, 0.35];
+/** Loop idle/work; reactions are one-shot and hold their recovered last pose. */
+export function poseFrameAt(kind: 'idle' | 'work' | 'reaction', elapsedSeconds: number, styleOrReaction?: WorkStyle | Reaction): number {
+  const durations = kind === 'idle' ? IDLE_DURATIONS : kind === 'reaction' ? REACTION_DURATIONS
+    : WORK_DURATIONS[styleOrReaction && WORK_STYLES.includes(styleOrReaction as WorkStyle) ? styleOrReaction as WorkStyle : 'desk'];
+  const total = durations.reduce((sum, duration) => sum + duration, 0);
+  const elapsed = Number.isFinite(elapsedSeconds) ? Math.max(0, elapsedSeconds) : 0;
+  let time = kind === 'reaction' ? Math.min(elapsed, total) : elapsed % total;
+  for (let i = 0; i < durations.length - 1; i++) {
+    if (time < durations[i]!) return i;
+    time -= durations[i]!;
+  }
+  return durations.length - 1;
+}
 
 export type RoleClass = 'coordinator' | 'research' | 'fabrication' | 'review' | 'tooling' | 'general' | 'scheduled';
 
@@ -45,6 +90,8 @@ export interface Look {
   skin: string;
   hat: 'none' | 'cap' | 'hood' | 'band' | 'brim' | 'goggles';
   apron: boolean;
+  /** Optional for callers with hand-authored legacy looks. */
+  garment?: 'jacket' | 'tunic' | 'coat';
   beard: boolean;
   belt: boolean;
 }
@@ -75,6 +122,8 @@ export function lookFor(id: string, role: RoleClass): Look {
     case 'scheduled': look.hat = 'hood'; look.cloth = pick(['#2f3a5a', '#3a3350', '#2f4a4a']); look.beard = false; break;
     default: break;
   }
+  look.garment = look.apron || role === 'scheduled' || role === 'coordinator' ? 'coat'
+    : role === 'research' || role === 'general' ? 'tunic' : 'jacket';
   look.cloth2 = shade(look.cloth, 0.72);
   return look;
 }
@@ -91,160 +140,220 @@ const APRON_DARK = '#8a7454';
 
 export function paintCharacterSheet(look: Look): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
-  canvas.width = FRAME_W * FRAME_COUNT * CHARACTER_SCALE;
-  canvas.height = FRAME_H * CHARACTER_SCALE;
+  canvas.width = FRAME_COLUMNS * FRAME_W * CHARACTER_SCALE;
+  canvas.height = Math.ceil(FRAME_COUNT / FRAME_COLUMNS) * FRAME_H * CHARACTER_SCALE;
   const ctx = canvas.getContext('2d')!;
   ctx.imageSmoothingEnabled = false;
-  const put = (index: number, frame: Painter) => {
-    ctx.drawImage(frame.canvas, index * FRAME_W * CHARACTER_SCALE, 0, FRAME_W * CHARACTER_SCALE, FRAME_H * CHARACTER_SCALE);
+  const put = (index: number, facing: Facing, mode: Mode, phase: number) => {
+    const frame = drawFrame(look, facing, mode, phase);
+    ctx.drawImage(frame.canvas, index % FRAME_COLUMNS * FRAME_W * CHARACTER_SCALE,
+      Math.floor(index / FRAME_COLUMNS) * FRAME_H * CHARACTER_SCALE,
+      FRAME_W * CHARACTER_SCALE, FRAME_H * CHARACTER_SCALE);
   };
-  for (const facing of FACINGS) for (let i = 0; i < 4; i++) put(walkFrame(facing, i), drawFrame(look, facing, 'walk', i));
-  put(SIT_FRAME, drawFrame(look, 'down', 'sit', 0));
-  for (const style of WORK_STYLES) for (const o of ORIENTS) for (let i = 0; i < 2; i++) {
-    const facing: Facing = o === 'side' ? 'left' : o;
-    put(workFrame(style, facing, i), drawFrame(look, facing, style, i));
+  for (const facing of FACINGS) {
+    for (let i = 0; i < WALK_FRAME_COUNT; i++) put(walkFrame(facing, i), facing, 'walk', i);
+    for (let i = 0; i < IDLE_FRAME_COUNT; i++) put(idleFrame(facing, i), facing, 'idle', i);
+    for (const kind of REACTIONS) for (let i = 0; i < REACTION_FRAME_COUNT; i++) put(reactionFrame(kind, facing, i), facing, kind, i);
+  }
+  for (const style of WORK_STYLES) for (const orient of ORIENTS) for (let i = 0; i < WORK_FRAME_COUNT; i++) {
+    const facing = orient === 'side' ? 'left' : orient;
+    put(workFrame(style, facing, i), facing, style, i);
   }
   return canvas;
 }
 
-type Mode = 'walk' | WorkStyle;
+type Mode = 'walk' | 'idle' | WorkStyle | Reaction;
+type Point = { x: number; y: number };
+// Contact, recoil, passing, rise; repeat on the opposite leg. The planted
+// boot stays at y=28; passing feet lift, rather than both feet sliding.
+const GAIT = [
+  { reach: -2, nearLift: 0, farLift: 0, bob: 0 },
+  { reach: -1, nearLift: 1, farLift: 0, bob: 1 },
+  { reach: 0, nearLift: 2, farLift: 0, bob: 0 },
+  { reach: 1, nearLift: 1, farLift: 0, bob: -1 },
+  { reach: 2, nearLift: 0, farLift: 0, bob: 0 },
+  { reach: 1, nearLift: 0, farLift: 1, bob: 1 },
+  { reach: 0, nearLift: 0, farLift: 2, bob: 0 },
+  { reach: -1, nearLift: 0, farLift: 1, bob: -1 },
+] as const;
 
-/** One 20×30 frame. `right` is painted as `left` and mirrored. */
+/** All coordinates below stay on the original 20×30 body grid. */
 function drawFrame(look: Look, facing: Facing, mode: Mode, phase: number): Painter {
   const p = new Painter(FRAME_W, FRAME_H);
   const mirror = facing === 'right';
-  const f: Facing = mirror ? 'left' : facing;
-  const X = (x: number) => (mirror ? FRAME_W - 1 - x : x);
-  const px = (x: number, y: number, c: string) => { if (x >= 0 && y >= 0 && x < FRAME_W && y < FRAME_H) p.px(X(x), y, c); };
+  const f = mirror ? 'left' : facing;
+  const side = f === 'left', back = f === 'up';
+  let lean = 0;
+  const px = (x: number, y: number, c: string) => {
+    const sourceX = x + 6 + lean;
+    p.px(mirror ? FRAME_W - 1 - sourceX : sourceX, y + 5, c);
+  };
   const rect = (x: number, y: number, w: number, h: number, c: string) => {
     for (let j = 0; j < h; j++) for (let k = 0; k < w; k++) px(x + k, y + j, c);
   };
-
-  const side = f === 'left', back = f === 'up';
-  const walking = mode === 'walk';
-  const sitting = mode === 'sit';
-  const working = !walking && !sitting;
-  const stride = walking ? [1, 0, -1, 0][phase]! : 0;
-  const bob = walking && phase % 2 === 1 ? 1 : 0;
-  const oy = sitting ? 4 : bob;           // head and torso shift; feet stay on the ground
+  const stroke = (a: Point, b: Point, color: string, width = 2) => {
+    const steps = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y), 1);
+    for (let i = 0; i <= steps; i++) rect(Math.round(a.x + (b.x - a.x) * i / steps), Math.round(a.y + (b.y - a.y) * i / steps), width, width, color);
+  };
+  const walking = mode === 'walk', idle = mode === 'idle', sitting = mode === 'sit';
+  const reaction = mode === 'complete' || mode === 'fail';
+  const working = !walking && !idle && !sitting && !reaction;
+  const gait = GAIT[walking ? phase : 2]!;
+  const oy = sitting ? 3 : walking ? gait.bob : mode === 'fail' ? [0, 1, 2, 0][phase]! : 0;
+  const headDip = mode === 'complete' ? [0, -1, -1, 0][phase]!
+    : mode === 'fail' ? [0, 1, 1, 1][phase]!
+    : working && (mode === 'read' || mode === 'desk') && phase === 2 ? 1 : 0;
+  const blink = (idle || sitting) && phase === 2 || reaction && phase === 2;
   const hairDark = shade(look.hair, 0.7);
   const skinDark = shade(look.skin, 0.82);
   const pantsDark = shade(look.pants, 0.78);
-  const hand = (x: number, y: number) => rect(x, y, 2, 2, look.skin);
+  const hand = (point: Point, far = false) => rect(point.x, point.y, 2, 2, far ? skinDark : look.skin);
 
-  // ------------------------------------------------------------- legs
-  const legTop = 21 + oy;
+  // Legs keep the original foot spacing and grounded baseline. Side legs
+  // separate fore/aft; front/back legs instead project that depth vertically.
+  const leg = (hipX: number, footX: number, lift: number, far: boolean) => {
+    stroke({ x: hipX, y: 21 }, { x: footX, y: 26 - lift }, far ? pantsDark : look.pants, 3);
+    rect(footX - (side ? 1 : 0), 26 - lift, 4, 3, far ? BOOT_DARK : BOOT);
+    rect(footX - (side ? 1 : 0), 28 - lift, 4, 1, BOOT_DARK);
+  };
   if (sitting) {
-    rect(5, 22, 10, 3, look.pants);
-    rect(5, 24, 10, 1, pantsDark);
-    rect(4, 25, 3, 3, BOOT); rect(13, 25, 3, 3, BOOT);
-    rect(4, 27, 3, 1, BOOT_DARK); rect(13, 27, 3, 1, BOOT_DARK);
+    rect(side ? 4 : 5, 24, side ? 9 : 10, 3, look.pants);
+    rect(side ? 3 : 5, 26, 3, 3, BOOT);
+    rect(side ? 8 : 12, 26, 3, 3, BOOT);
+    rect(side ? 3 : 5, 28, 3, 1, BOOT_DARK);
+    rect(side ? 8 : 12, 28, 3, 1, BOOT_DARK);
   } else if (side) {
-    const backX = 9 + stride, frontX = 8 - stride;
-    rect(backX, legTop, 3, 5, pantsDark);
-    rect(backX - 1, 26, 4, 3, BOOT_DARK);
-    rect(frontX, legTop, 3, 5, look.pants);
-    rect(frontX - 2, 26, 5, 3, BOOT);
-    rect(frontX - 2, 28, 5, 1, BOOT_DARK);
+    leg(10, 10 - (walking ? gait.reach : 0), walking ? gait.farLift : 0, true);
+    leg(7, 7 + (walking ? gait.reach : 0), walking ? gait.nearLift : 0, false);
   } else {
-    const l = Math.max(0, stride), r = Math.max(0, -stride);
-    rect(5, legTop, 4, 5 + l - oy, look.pants);
-    rect(11, legTop, 4, 5 + r - oy, look.pants);
-    rect(5, 26 + l, 4, 3 - l, BOOT); rect(11, 26 + r, 4, 3 - r, BOOT);
-    rect(5, 28, 4, 1, BOOT_DARK); rect(11, 28, 4, 1, BOOT_DARK);
-    if (!back) { px(8, legTop, pantsDark); px(11, legTop, pantsDark); }
+    leg(5, 5, walking ? gait.nearLift : 0, back);
+    leg(11, 11, walking ? gait.farLift : 0, !back);
   }
 
-  // ------------------------------------------------------------- back arm (side view), behind the body
+  // A weight transfer, not a perpetual vertical idle bounce.
+  lean = idle && (phase === 1 || phase === 2) ? (side ? -1 : 1)
+    : mode === 'fail' && phase === 2 && side ? -1 : 0;
   const shoulder = 13 + oy;
-  const armLen = 6;
-  if (side && !sitting) {
-    const raised = working && (mode === 'hammer' || mode === 'bellows') && phase === 0;
-    if (!raised) { rect(13, shoulder + 1 - stride, 2, armLen, look.cloth2); rect(13, shoulder + 1 - stride + armLen, 2, 2, skinDark); }
+  let handL: Point = { x: side ? 5 : 3, y: shoulder + 6 };
+  let handR: Point = { x: side ? 12 : 15, y: shoulder + 6 };
+  if (walking) {
+    if (side) {
+      // Oppose the near leg. Far arm is the same length, only shaded/occluded.
+      handL = { x: 5 - gait.reach, y: shoulder + (Math.abs(gait.reach) === 2 ? 5 : 6) };
+      handR = { x: 12 + gait.reach, y: handL.y };
+    } else {
+      const swing = [1, 1, 0, -1, -1, -1, 0, 1][phase]!;
+      handL = { x: 3 - swing, y: shoulder + 6 - Math.abs(swing) };
+      handR = { x: 15 - swing, y: shoulder + 6 - Math.abs(swing) };
+    }
+  } else if (sitting) {
+    handL = { x: side ? 3 : 5, y: 22 };
+    handR = { x: side ? 9 : 13, y: 22 };
+  } else if (reaction) {
+    // Completion: chin up and one open-hand acknowledgement. Failure:
+    // both shoulders fold inward with the head down. Never the same shrug.
+    const lift = [0, 1, 2, 0][phase]!;
+    if (mode === 'complete') {
+      const raised = phase === 1 || phase === 2;
+      if (side) handL = { x: raised ? 2 : 5, y: shoulder + [5, 3, 2, 6][phase]! };
+      else handR = { x: raised ? 18 : 15, y: shoulder + [5, 3, 2, 6][phase]! };
+    } else {
+      handL = { x: (side ? 5 : 3) + lift, y: shoulder + 6 - lift };
+      handR = { x: (side ? 12 : 15) - lift, y: shoulder + 6 - lift };
+    }
+  } else if (working) {
+    // Hands are authored with the prop, not independent decorative pixels.
+    // Up-facing work is offset at the shoulder so the action is not hidden
+    // under a large hat or painted implausibly across the resident's back.
+    if (side) {
+      switch (mode) {
+        case 'hammer': handL = [{x:0,y:13},{x:-1,y:10},{x:0,y:17},{x:2,y:16}][phase]!; break;
+        case 'read': handL = [{x:1,y:17},{x:1,y:16},{x:2,y:15},{x:2,y:18}][phase]!; break;
+        case 'bellows': handL = [{x:1,y:14},{x:0,y:15},{x:2,y:18},{x:2,y:16}][phase]!; break;
+        case 'parcel': handL = [{x:3,y:18},{x:2,y:16},{x:0,y:16},{x:2,y:18}][phase]!; break;
+        case 'gaze': handL = [{x:3,y:11},{x:3,y:10},{x:2,y:10},{x:4,y:12}][phase]!; break;
+        case 'desk': handL = [{x:1,y:17},{x:0,y:16},{x:2,y:17},{x:3,y:15}][phase]!; break;
+        case 'haggle': handL = [{x:3,y:18},{x:0,y:16},{x:1,y:14},{x:4,y:17}][phase]!; break;
+      }
+      if (mode === 'read' || mode === 'parcel' || mode === 'bellows') handR = { x: handL.x + 4, y: handL.y };
+    } else {
+      switch (mode) {
+        case 'hammer': handR = [{x:18,y:13},{x:20,y:10},{x:17,y:18},{x:18,y:16}][phase]!; break;
+        case 'read':
+          handL = {x:back ? 3 : 5,y:[17,16,17,18][phase]!};
+          handR = {x:back ? 16 : [13,13,12,13][phase]!,y:[17,16,14,18][phase]!}; break;
+        case 'bellows':
+          handL = {x:back ? 3 : 5,y:[15,16,18,17][phase]!};
+          handR = {x:back ? 17 : 13,y:[15,16,18,17][phase]!}; break;
+        case 'parcel':
+          handL = {x:back ? 3 : 5,y:[18,17,16,18][phase]!};
+          handR = {x:back ? [16,16,17,16][phase]! : 13,y:handL.y}; break;
+        case 'gaze': handR = [{x:15,y:12},{x:15,y:10},{x:16,y:10},{x:16,y:13}][phase]!; break;
+        case 'desk': handR = [{x:15,y:17},{x:16,y:16},{x:14,y:17},{x:16,y:14}][phase]!; handL = {x:5,y:18}; break;
+        case 'haggle': handR = [{x:15,y:18},{x:18,y:16},{x:17,y:14},{x:14,y:17}][phase]!; break;
+      }
+    }
   }
 
-  // ------------------------------------------------------------- torso
+  // Equal upper-arm and forearm segments. Bend the elbow with a fixed-length
+  // two-link construction; projection may shorten reach, never the anatomy.
+  const arm = (start: Point, end: Point, far: boolean) => {
+    const dx = end.x - start.x, dy = end.y - start.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const bend = Math.sqrt(Math.max(0, 3 * 3 - distance * distance / 4));
+    const direction = start.x < 10 ? 1 : -1;
+    const elbow = { x: Math.round((start.x + end.x) / 2 - direction * dy / distance * bend),
+      y: Math.round((start.y + end.y) / 2 + direction * dx / distance * bend) };
+    const color = far ? look.cloth2 : look.cloth;
+    stroke(start, elbow, color);
+    stroke(elbow, end, color);
+    hand(end, far);
+  };
+  // Side arm is behind the torso; equal sleeve/hand length, darker plane.
+  if (side) arm({x:working && (mode === 'read' || mode === 'parcel' || mode === 'bellows') ? 9 : 12,y:shoulder}, handR, true);
+
   const torsoTop = 12 + oy;
-  if (side) {
-    rect(6, torsoTop, 8, 9, look.cloth);
-    rect(12, torsoTop, 2, 9, look.cloth2);
-    rect(6, torsoTop + 8, 8, 1, look.cloth2);
+  const garment = look.garment ?? (look.apron ? 'coat' : 'tunic');
+  const hem = garment === 'jacket' ? 19 : garment === 'tunic' ? 21 : 24;
+  const tx = side ? 6 : 5, tw = side ? 8 : 10;
+  rect(tx, torsoTop, tw, hem - 12, look.cloth);
+  rect(tx + tw - 2, torsoTop + 1, 2, hem - 13, look.cloth2);
+  if (garment === 'jacket') {
+    // Cropped square hem, lapels and a visible trouser waistband.
+    rect(tx, 18 + oy, tw, 1, look.cloth2);
+    rect(tx, 19 + oy, tw, 2, look.pants);
+    if (!back) { rect(side ? 6 : 8, 13 + oy, 1, 3, look.cloth2); rect(side ? 7 : 11, 13 + oy, 1, 2, look.cloth2); }
   } else {
-    rect(5, torsoTop, 10, 9, look.cloth);
-    rect(5, torsoTop + 8, 10, 1, look.cloth2);
-    rect(13, torsoTop + 1, 2, 7, look.cloth2);
-    if (!back) { px(9, torsoTop, look.cloth2); px(10, torsoTop, look.cloth2); }
+    // Tunic flares once; coat has a longer split skirt, not a larger body.
+    const follow = walking ? [0,0,-1,-1,0,0,1,1][phase]! : 0;
+    rect(tx - 1 + follow, hem - 3 + oy, tw + 2, 2, look.cloth);
+    rect(tx - 1 + follow, hem - 1 + oy, tw + 2, 1, look.cloth2);
+    if (garment === 'coat') rect(side ? 9 : 9 + follow, 21 + oy, 2, 3, look.pants);
   }
   if (look.apron && !back) {
-    rect(6, torsoTop + 2, side ? 6 : 8, 8, APRON);
-    rect(6, torsoTop + 2, side ? 6 : 8, 1, APRON_DARK);
-    rect(side ? 6 : 7, torsoTop + 9, 6, 1, APRON_DARK);
+    rect(side ? 6 : 7, torsoTop + 2, side ? 5 : 6, 9, APRON);
+    rect(side ? 6 : 7, torsoTop + 2, side ? 5 : 6, 1, APRON_DARK);
+    rect(side ? 6 : 7, torsoTop + 10, side ? 5 : 6, 1, APRON_DARK);
   }
-  // satchel strap across the chest, or the back
+  const follow = walking ? [0,1,1,0,0,-1,-1,0][phase]! : 0;
   if (!side) {
-    for (let i = 0; i < 7; i++) { const sx = back ? 6 + i : 13 - i; px(sx, torsoTop + i, STRAP); }
-    if (!back) rect(5, torsoTop + 5, 2, 3, STRAP);
+    for (let i = 0; i < 7; i++) px(back ? 6 + i : 13 - i, torsoTop + i, STRAP);
+    rect(back ? 13 : 4, torsoTop + 6 + follow, 3, 3, STRAP);
+    px(back ? 14 : 5, torsoTop + 6 + follow, HAT);
   } else {
     rect(11, torsoTop, 2, 7, STRAP);
-    rect(12, torsoTop + 6, 2, 3, STRAP);
+    rect(12, torsoTop + 6 + follow, 3, 3, STRAP);
+    px(13, torsoTop + 6 + follow, HAT);
   }
   if (look.belt) {
-    rect(side ? 6 : 5, torsoTop + 6, side ? 8 : 10, 1, STRAP);
-    if (!back) { px(side ? 8 : 9, torsoTop + 6, BUCKLE); px(side ? 8 : 10, torsoTop + 6, BUCKLE); }
+    rect(tx, torsoTop + 6, tw, 1, STRAP);
+    if (!back) rect(side ? 8 : 9, torsoTop + 6, side ? 1 : 2, 1, BUCKLE);
   }
-
-  // ------------------------------------------------------------- arms in front
-  let handL = { x: 3, y: shoulder + armLen }, handR = { x: 15, y: shoulder + armLen };
-  if (sitting) {
-    rect(3, shoulder, 2, 5, look.cloth); rect(15, shoulder, 2, 5, look.cloth);
-    hand(3, shoulder + 5); hand(15, shoulder + 5);
-  } else if (side) {
-    const raised = working && (mode === 'hammer' || mode === 'bellows') && phase === 0;
-    const forward = working && (mode === 'read' || mode === 'parcel' || mode === 'desk' || mode === 'gaze'
-      || ((mode === 'hammer' || mode === 'bellows') && phase === 1) || (mode === 'haggle' && phase === 0));
-    if (raised) {
-      rect(5, shoulder - 5, 2, 6, look.cloth); hand(5, shoulder - 7); handL = { x: 5, y: shoulder - 7 };
-    } else if (forward) {
-      rect(5, shoulder, 2, 3, look.cloth); rect(2, shoulder + 2, 4, 2, look.cloth); hand(1, shoulder + 2); handL = { x: 1, y: shoulder + 2 };
-    } else {
-      rect(5, shoulder + stride, 2, armLen, look.cloth); hand(5, shoulder + stride + armLen); handL = { x: 5, y: shoulder + stride + armLen };
-    }
-  } else if (back) {
-    const up = working && (mode === 'hammer' || mode === 'bellows' || mode === 'haggle') && phase === 0;
-    if (up) {
-      rect(3, shoulder - 5, 2, armLen, look.cloth); rect(15, shoulder - 5, 2, armLen, look.cloth);
-      hand(3, shoulder - 7); hand(15, shoulder - 7);
-    } else {
-      rect(3, shoulder + stride, 2, armLen, look.cloth); rect(15, shoulder - stride, 2, armLen, look.cloth);
-      hand(3, shoulder + stride + armLen); hand(15, shoulder - stride + armLen);
-    }
-  } else {
-    const fwd = working && (mode === 'read' || mode === 'parcel' || mode === 'desk');
-    const wave = working && mode === 'haggle';
-    const up = working && (mode === 'hammer' || mode === 'bellows') && phase === 0;
-    if (fwd) {
-      rect(3, shoulder, 2, 4, look.cloth); rect(15, shoulder, 2, 4, look.cloth);
-      rect(4, shoulder + 3, 2, 2, look.cloth); rect(14, shoulder + 3, 2, 2, look.cloth);
-      handL = { x: 5, y: shoulder + 4 }; handR = { x: 13, y: shoulder + 4 };
-      hand(handL.x, handL.y); hand(handR.x, handR.y);
-    } else if (wave) {
-      rect(3, shoulder, 2, armLen, look.cloth); hand(3, shoulder + armLen);
-      const lift = phase === 0 ? 6 : 3;
-      rect(15, shoulder - lift, 2, lift + 1, look.cloth); hand(15, shoulder - lift - 2); handR = { x: 15, y: shoulder - lift - 2 };
-    } else if (up) {
-      rect(3, shoulder, 2, armLen, look.cloth); hand(3, shoulder + armLen);
-      rect(15, shoulder - 6, 2, 7, look.cloth); hand(15, shoulder - 8); handR = { x: 15, y: shoulder - 8 };
-    } else if (working && mode === 'gaze') {
-      rect(3, shoulder, 2, armLen, look.cloth); hand(3, shoulder + armLen);
-      rect(15, shoulder - 3, 2, 4, look.cloth); rect(13, shoulder - 4, 3, 2, look.cloth); hand(11, shoulder - 5); handR = { x: 11, y: shoulder - 5 };
-    } else {
-      rect(3, shoulder - stride, 2, armLen, look.cloth); rect(15, shoulder + stride, 2, armLen, look.cloth);
-      hand(3, shoulder - stride + armLen); hand(15, shoulder + stride + armLen);
-    }
-  }
+  if (!side) arm({x:15,y:shoulder}, handR, false);
+  arm({x:side ? 5 : 3,y:shoulder}, handL, false);
 
   // ------------------------------------------------------------- head
-  const headTop = 2 + oy;
+  const headTop = 2 + oy + headDip;
   const faceX = side ? 6 : 5, faceW = side ? 8 : 10;
   if (back) {
     rect(5, headTop, 10, 10, look.hairStyle === 'bald' ? look.skin : look.hair);
@@ -255,8 +364,8 @@ function drawFrame(look: Look, facing: Facing, mode: Mode, phase: number): Paint
     rect(faceX, headTop + 1, faceW, 9, look.skin);
     rect(faceX + faceW - 1, headTop + 2, 1, 7, skinDark);
     rect(faceX, headTop + 9, faceW, 1, skinDark);
-    if (side) rect(faceX + 1, headTop + 5, 1, 2, INK);
-    else { rect(faceX + 2, headTop + 5, 1, 2, INK); rect(faceX + faceW - 3, headTop + 5, 1, 2, INK); }
+    if (side) rect(faceX + 1, headTop + 5 + (blink ? 1 : 0), blink ? 2 : 1, blink ? 1 : 2, INK);
+    else { rect(faceX + 2, headTop + 5 + (blink ? 1 : 0), blink ? 2 : 1, blink ? 1 : 2, INK); rect(faceX + faceW - 3, headTop + 5 + (blink ? 1 : 0), blink ? 2 : 1, blink ? 1 : 2, INK); }
     if (look.beard) { rect(faceX + 1, headTop + 8, faceW - 2, 2, look.hair); rect(faceX + 1, headTop + 9, faceW - 2, 1, hairDark); }
     if (look.hairStyle !== 'bald') {
       rect(faceX, headTop, faceW, 2, look.hair);
@@ -298,26 +407,88 @@ function drawFrame(look: Look, facing: Facing, mode: Mode, phase: number): Paint
       break;
   }
 
-  // ------------------------------------------------------------- what the hands hold
+  // Props share the exact wrist coordinates above. No detached dust/spark
+  // substitutes for hand motion. Bellows has leather folds, not a hammer.
   if (working) {
-    if (side) {
-      if (mode === 'hammer' || mode === 'bellows') {
-        if (phase === 0) { rect(handL.x, handL.y - 5, 1, 5, STRAP); rect(handL.x - 2, handL.y - 7, 5, 3, '#8b9090'); rect(handL.x - 2, handL.y - 7, 5, 1, '#b5b8b8'); }
-        else { rect(handL.x - 5, handL.y + 1, 6, 1, STRAP); rect(handL.x - 8, handL.y, 3, 3, '#8b9090'); }
-      } else if (mode === 'read') { rect(handL.x - 3, handL.y - 2, 7, 5, '#d8caa2'); rect(handL.x, handL.y - 2, 1, 5, '#a89a74'); if (phase === 1) px(handL.x + 2, handL.y - 3, '#f1ead8'); }
-      else if (mode === 'parcel') { rect(handL.x - 3, handL.y - 4, 7, 6, '#9f7950'); rect(handL.x - 3, handL.y - 4, 7, 1, '#c0955f'); rect(handL.x, handL.y - 4, 1, 6, '#d5be89'); }
-      else if (mode === 'desk') { rect(handL.x + 1, handL.y - 5 + phase, 1, 5, '#e0d3a0'); px(handL.x + 1, handL.y - 6 + phase, '#c9b58f'); }
-      else if (mode === 'gaze') { rect(handL.x - 6, headTop + 5 - phase, 8, 2, '#b99a58'); rect(handL.x - 7, headTop + 4 - phase, 2, 4, '#8a7a3a'); }
-      else if (mode === 'haggle' && phase === 0) { px(handL.x - 2, handL.y - 2, BUCKLE); px(handL.x - 3, handL.y - 4, BUCKLE); }
-    } else if (!back) {
-      if (mode === 'read') { rect(6, handL.y - 1, 8, 5, '#d8caa2'); rect(10, handL.y - 1, 1, 5, '#a89a74'); rect(7, handL.y, 2, 1, '#a89a74'); if (phase === 1) px(11, handL.y - 2, '#f1ead8'); }
-      else if (mode === 'parcel') { rect(5, handL.y - 5, 10, 7, '#9f7950'); rect(5, handL.y - 5, 10, 1, '#c0955f'); rect(9, handL.y - 5, 2, 7, '#d5be89'); rect(5, handL.y - 2, 10, 1, '#d5be89'); hand(4, handL.y - 1); hand(14, handL.y - 1); }
-      else if (mode === 'desk') { rect(handR.x, handR.y - 4 + phase, 1, 4, '#e0d3a0'); }
-      else if (mode === 'haggle' && phase === 0) { px(handR.x + 3, handR.y - 2, BUCKLE); px(handR.x + 4, handR.y - 4, BUCKLE); px(handR.x + 2, handR.y - 5, BUCKLE); }
-      else if (mode === 'hammer' || mode === 'bellows') {
-        if (phase === 0) { rect(handR.x, handR.y - 5, 1, 5, STRAP); rect(handR.x - 2, handR.y - 7, 5, 3, '#8b9090'); rect(handR.x - 2, handR.y - 7, 5, 1, '#b5b8b8'); }
-        else { rect(16, shoulder + 2, 1, 5, STRAP); rect(15, shoulder + 7, 4, 3, '#8b9090'); }
-      } else if (mode === 'gaze') { rect(handR.x - 6, handR.y - 1, 8, 2, '#b99a58'); }
+    const grip = side ? handL : handR;
+    if (mode === 'hammer') {
+      if (phase <= 1) {
+        rect(grip.x, grip.y - 5, 1, 6, STRAP);
+        rect(grip.x - 2, grip.y - 7, side ? 4 : 5, 3, '#8b9090');
+        rect(grip.x - 2, grip.y - 7, side ? 4 : 5, 1, '#b5b8b8');
+      } else if (phase === 2) {
+        if (side) {
+          rect(grip.x - 3, grip.y, 4, 1, STRAP);
+          rect(grip.x - 4, grip.y - 1, 3, 4, '#8b9090');
+          rect(grip.x - 4, grip.y - 1, 3, 1, '#b5b8b8');
+        } else {
+          rect(grip.x, grip.y, 1, 5, STRAP);
+          rect(grip.x - 1, grip.y + 4, 5, 3, '#8b9090');
+          rect(grip.x - 1, grip.y + 4, 5, 1, '#b5b8b8');
+        }
+      } else {
+        stroke(grip, {x:grip.x - 2,y:grip.y - 3}, STRAP, 1);
+        rect(grip.x - 4, grip.y - 5, 4, 3, '#8b9090');
+        rect(grip.x - 4, grip.y - 5, 4, 1, '#b5b8b8');
+      }
+    } else if (mode === 'read') {
+      const bx = side ? handL.x - 3 : back ? handR.x - 1 : handL.x;
+      const by = (back ? handR.y : handL.y) - 2;
+      const width = side || back ? 7 : 10;
+      rect(bx, by, width, 6, STRAP);
+      rect(bx, by, width, 5, '#d8caa2');
+      rect(bx + Math.floor(width / 2), by, 1, 5, '#a89a74');
+      rect(bx + 1, by + 1, 2, 1, '#a89a74');
+      if (phase === 1 || phase === 2) {
+        // A page lifted by the moving wrist, then laid over the spine.
+        rect(bx + (phase === 1 ? width - 3 : 2), by - (phase === 1 ? 1 : 2), 3, 4, '#f1ead8');
+      }
+    } else if (mode === 'bellows') {
+      const bx = side ? grip.x - 2 : back ? grip.x - 1 : 6;
+      const by = grip.y - 1;
+      const height = 23 - by;
+      rect(bx, by, 6, height, '#78503a');
+      for (let y = by + 2; y < 22; y += 2) rect(bx + 1, y, 4, 1, STRAP);
+      rect(bx - 1, by, 8, 1, HAT);
+      rect(bx - 1, 22, 8, 1, HAT_DARK);
+      rect(bx - 2, 21, 2, 1, '#8b9090');
+    } else if (mode === 'parcel') {
+      const bx = side ? handL.x - 3 : back ? handR.x - 1 : 5;
+      const by = (back ? handR.y : handL.y) - 4;
+      const width = side || back ? 7 : 10;
+      rect(bx, by, width, 6, '#9f7950');
+      rect(bx, by, width, 1, '#c0955f');
+      rect(bx + Math.floor(width / 2), by, 1, 6, '#d5be89');
+      rect(bx, by + 3, width, 1, '#d5be89');
+    } else if (mode === 'gaze') {
+      if (side) {
+        // Bring to eye, focus, scan left, lower. The eyepiece meets the face.
+        const gy = grip.y - 1;
+        rect(grip.x - 5, gy, 9, 2, '#b99a58');
+        rect(grip.x - 6, gy - 1, 2, 4, '#8a7a3a');
+        rect(grip.x - 6, gy, 1, 2, '#7fb2dd');
+        rect(grip.x + 2, gy, 1, 2, STRAP);
+      } else {
+        // End-on telescope is shorter through perspective, same moving grip.
+        rect(grip.x - 1, grip.y - 2, 4, 4, '#8a7a3a');
+        rect(grip.x, grip.y - 1, 2, 2, '#b99a58');
+        rect(grip.x, grip.y - 1, 1, 1, '#7fb2dd');
+        rect(grip.x + 1, grip.y + 1, 1, 2, STRAP);
+      }
+    } else if (mode === 'desk') {
+      // Quill strokes travel with the wrist; phase 3 lifts clear of the page.
+      rect(grip.x, grip.y - 4, 1, 6, '#c9b58f');
+      rect(grip.x + 1, grip.y - 4, 1, 3, '#e0d3a0');
+      px(grip.x, grip.y + 2, INK);
+    } else if (mode === 'haggle') {
+      // A held coin offered, turned in the palm, considered, withdrawn.
+      rect(grip.x, grip.y - 2, phase === 2 ? 1 : 2, 2, BUCKLE);
+      px(grip.x, grip.y - 2, '#f0d68b');
+    }
+    // Fingers overlap the held object, preserving its wrist attachment.
+    hand(grip);
+    if (mode === 'read' || mode === 'parcel' || mode === 'bellows') {
+      hand(side ? handR : handL, side);
     }
   }
 
