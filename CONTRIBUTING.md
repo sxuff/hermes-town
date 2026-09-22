@@ -17,6 +17,7 @@ Use `http://127.0.0.1:5173/?agents=demo&hour=17` for visual development. Demo mo
 npm run test:contracts
 npm run build
 npx playwright install chromium
+npm run verify:characters
 npm run verify:world
 hermes plugins doctor integrations/hermes-town-plugin --ci
 ```

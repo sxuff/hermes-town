@@ -132,11 +132,14 @@ npm ci
 npm run test:contracts
 npm run build
 npx playwright install chromium
+npm run verify:characters
 npm run verify:world
 hermes plugins doctor integrations/hermes-town-plugin --ci
 ```
 
-`test:contracts` checks the plugin privacy allowlist, the real HTTP server contract, and cron keeper pre-registration, including cross-language key agreement with the plugin. `verify:world` exercises navigation, resident lifecycle behavior, camera controls, offline-live honesty, and visual captures in Chromium.
+`test:contracts` checks the plugin privacy allowlist, the real HTTP server contract, and cron keeper pre-registration, including cross-language key agreement with the plugin. `verify:characters` checks neutral arm symmetry, tool visibility, sprite bounds, distance-driven gait, workstation transitions, and event-driven reactions in Chromium. `verify:world` exercises navigation, resident lifecycle behavior, camera controls, offline-live honesty, and visual captures in Chromium.
+
+For character review, run `npm run build && node scripts/capture-characters.mjs`. It exports sprite atlases and captures the production renderer using explicitly scripted events, with live endpoints blocked. Images and metadata are saved under `output/playwright/characters/`; these are test fixtures, not live Hermes activity.
 
 ## License
 
