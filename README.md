@@ -114,7 +114,9 @@ See [LIVE_BRIDGE.md](LIVE_BRIDGE.md) for the full contract and runbook.
 A session is one resident, the coordinator. It thinks at a hall desk. Every
 tool call dispatches a runner: a smaller figure that leaves the desk, goes to
 that tool's building, works there for a few real seconds, and walks back with
-the result (a tick, or smoke if the tool failed). A turn with six tool calls
+the result: a ✓ bubble, or, if the tool failed, a slump and a ✗ bubble, then a
+red "!" when it hands the result in. Chimney smoke is ambient and never means
+failure. A turn with six tool calls
 is six runners fanning out across town while the coordinator sits thinking.
 When the turn ends the coordinator walks to the notice board in the square,
 pins the result, and goes to stand at its own front door with a "waiting for
