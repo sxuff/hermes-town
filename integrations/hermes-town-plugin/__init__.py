@@ -364,6 +364,9 @@ class _Bridge:
         token_path = (
             os.environ.get("HERMES_TOWN_BRIDGE_TOKEN_FILE", "").strip() or _default_token_path()
         )
+        # Remember where the token was looked for, including when it was not
+        # there yet. The refresh path needs the same path the constructor used.
+        self._token_path = token_path
         token = _read_token(token_path)
         if token is None:
             self.enabled = False
@@ -386,6 +389,57 @@ class _Bridge:
         self._pseudonym_key = hmac.new(
             token.encode("utf-8"), b"hermes-town.pseudonym.v1", hashlib.sha256
         ).digest()
+        self._token_path = token_path
+
+    def _ensure_enabled(self) -> bool:
+        """Re-read the bridge token and enable the bridge if it now exists.
+
+        The bridge is a process-wide singleton created on the first lifecycle
+        hook. When the plugin is enabled before ``hermes town start`` has
+        written the token file, that first hook builds a bridge that can never
+        deliver: the token is read once, in the constructor, and a missing
+        token leaves ``enabled`` False for the life of the process.
+
+        The token is created by the Town CLI, which may run at any point
+        relative to the gateway's first turn. Re-reading it on demand makes
+        the bridge recover without a gateway restart, which the plugin cannot
+        ask the user for.
+        """
+        if self.enabled:
+            return True
+        token_path = getattr(self, "_token_path", "") or _default_token_path()
+        token = _read_token(token_path)
+        if token is None:
+            return False
+        if not _endpoint_is_allowed(self.url):
+            logger.warning(
+                "hermes-town: bridge URL is not loopback http or https; bridge inert"
+            )
+            return False
+        self.enabled = True
+        self._auth = "Bearer " + token
+        self._pseudonym_key = hmac.new(
+            token.encode("utf-8"), b"hermes-town.pseudonym.v1", hashlib.sha256
+        ).digest()
+        self._token_path = token_path
+        # Any resident registered while the bridge was inert was keyed with an
+        # empty pseudonym key, and nothing was ever published for it. Those
+        # entries cannot match the keys minted from the real token, so they
+        # would leave permanent orphans in the identity map. Drop them.
+        with self._lock:
+            stale = [
+                key for key, entry in self._identities.items()
+                if not entry.get("published")
+            ]
+            for key in stale:
+                del self._identities[key]
+        if stale:
+            logger.info(
+                "hermes-town: dropped %d resident(s) registered while the bridge "
+                "was inert", len(stale)
+            )
+        logger.info("hermes-town: bridge token appeared; bridge enabled")
+        return True
 
     # -- identity ----------------------------------------------------------
 
@@ -394,7 +448,14 @@ class _Bridge:
 
         ``raw_id`` is consumed as HMAC input and immediately discarded. The
         return value is the only identifier that exists downstream.
+
+        The pseudonym key is derived from the bridge token, so the bridge must
+        be enabled before a key is minted. Otherwise the resident would be
+        registered under a hash of the empty key and would keep that
+        identity for the rest of the process, even after the bridge recovers.
         """
+        if not self.enabled:
+            self._ensure_enabled()
         digest = hmac.new(
             self._pseudonym_key, (kind + "\x00" + raw_id).encode("utf-8"), hashlib.sha256
         ).hexdigest()
@@ -457,7 +518,7 @@ class _Bridge:
         detail: Optional[str] = None,
     ) -> None:
         """Enqueue exactly one bounded event. Never raises, never blocks."""
-        if not self.enabled:
+        if not self.enabled and not self._ensure_enabled():
             return
         event: Dict[str, Any] = {
             "id": self.next_event_id(),
@@ -474,6 +535,9 @@ class _Bridge:
         try:
             self._queue.put_nowait(event)
             self.enqueued += 1
+            # Remember that this resident reached the wire. Only residents
+            # that never got there may be dropped when the bridge recovers.
+            self.update(key, published=True)
         except queue.Full:
             # Drop the newest. An old event still in the queue describes a
             # transition the town has not seen yet; a new one usually does not.
@@ -713,7 +777,7 @@ def _on_pre_llm_call(
     decide which namespace an unseen session belongs to.
     """
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return None
     resolved = _resolve_session(bridge, session_id, parent_session_id)
     if resolved is None:
@@ -739,7 +803,7 @@ def _on_pre_llm_call(
 def _on_post_llm_call(session_id: Any = None, **_ignored: Any) -> None:
     """A turn produced a response. ``assistant_response`` is never read."""
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return
     resolved = _resolve_session(bridge, session_id)
     if resolved is None:
@@ -785,7 +849,7 @@ def _on_pre_tool_call(
     modifies a tool call.
     """
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return None
     resolved = _resolve_session(bridge, session_id, parent_session_id)
     if resolved is None:
@@ -815,7 +879,7 @@ def _on_post_tool_call(
     Only the ok/error classification Hermes has already computed is used.
     """
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return
     resolved = _resolve_session(bridge, session_id)
     if resolved is None:
@@ -842,7 +906,7 @@ def _on_session_start(session_id: Any = None, **_ignored: Any) -> None:
     """A session was created. Hermes fires this for a delegated child's own
     session too, after ``subagent_start`` has already given it a resident."""
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return
     resolved = _resolve_session(bridge, session_id)
     if resolved is None:
@@ -901,7 +965,7 @@ def _on_session_end(
 ) -> None:
     """A run finished. Only the three booleans Hermes already computed are read."""
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return
     resolved = _resolve_session(bridge, session_id)
     if resolved is None:
@@ -933,7 +997,7 @@ def _on_session_reset(session_id: Any = None, **_ignored: Any) -> None:
 
 def _retire_by_session(session_id: Any) -> None:
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return
     resolved = _resolve_session(bridge, session_id)
     if resolved is None:
@@ -967,7 +1031,7 @@ def _on_subagent_start(
     id its own tool hooks will carry; the subagent id is the fallback.
     """
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return
     raw = _identifier(child_session_id) or _identifier(child_subagent_id)
     if raw is None:
@@ -992,7 +1056,7 @@ def _on_subagent_stop(
     """A child agent finished. ``child_summary`` and ``tool_call_history``
     arrive in ``_ignored`` and are never read."""
     bridge = _get_bridge()
-    if not bridge.enabled:
+    if not bridge._ensure_enabled():
         return
     raw = _identifier(child_session_id) or _identifier(child_subagent_id)
     if raw is None:
